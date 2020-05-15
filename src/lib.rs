@@ -7,6 +7,7 @@ use std::io::{self, Read, Write};
 
 use ansi_term::Color;
 use ansi_term::Color::Fixed;
+use regex::Regex;
 
 use crate::squeezer::{SqueezeAction, Squeezer};
 
@@ -440,6 +441,60 @@ impl<'a, Writer: Write> Printer<'a, Writer> {
     }
 }
 
+/// Parse a byte count integer.
+/// Accepts two forms, either a hex number prefixed by "0x", or a decimal number optionally
+/// followed by a suffix. Suffixes can be 'b' or 'B' for byte (1); kb, KB, MB, GB, TB for
+/// SI powers of 10 (1000, 1000000, etc); or k/K/KiB, M/MiB, G/GiB, T/TiB for binary
+/// power of 2 (1024, 1024*1024, etc).
+pub fn parse_byte_count(input: &str) -> Result<u64, String> {
+    // handle hex strings first, they have a prefix of '0x' and no suffixes are allowed
+    if input.starts_with("0x") {
+        return u64::from_str_radix(input.trim_start_matches("0x"), 16)
+            .map_err(|e| format!("failed to parse '{}' as a hex byte count: {}", input, e));
+    }
+
+    // regex to parse a decimal number followed by an optional alpha suffix.
+    let re = Regex::new(r"^(?P<num>[0-9]+)(?P<suffix>[A-Za-z]*)$").unwrap();
+    let caps = re
+        .captures(input)
+        .ok_or_else(|| format!("invalid byte count format: '{}'", input))?;
+
+    // Both groups will always match so we can immediately unwrap them and get the matching string
+    let num = caps.name("num").unwrap().as_str();
+    let suffix = caps.name("suffix").unwrap().as_str();
+
+    let num = u64::from_str_radix(num, 10)
+        .map_err(|e| format!("failed to parse byte count '{}': {}", num, e))?;
+
+    let multiplier: u64 = match suffix {
+        // a single byte
+        "" | "b" | "B" => 1,
+
+        // powers of 10 SI suffixes
+        "kB" | "KB" => 1000,
+        "MB" => 1_000_000,
+        "GB" => 1_000_000_000,
+        "TB" => 1_000_000_000_000,
+
+        // powers of 2 binary suffixes
+        "k" | "K" | "KiB" => 1 << 10,
+        "M" | "MiB" => 1 << 20,
+        "G" | "GiB" => 1 << 30,
+        "T" | "TiB" => 1 << 40,
+
+        _ => {
+            return Err(format!(
+                "failed to parse byte count '{}': invalid suffix '{}'",
+                input, suffix
+            ));
+        }
+    };
+
+    // make sure that multiplication doesn't overflow
+    num.checked_mul(multiplier)
+        .ok_or_else(|| format!("byte count '{}' size calculation overflowed", input))
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -500,5 +555,39 @@ mod tests {
 
         let actual_string: &str = str::from_utf8(&output).unwrap();
         assert_eq!(actual_string, expected_string)
+    }
+
+    #[test]
+    fn parse_byte_count() {
+        use super::parse_byte_count as pbc; // alias for brevity
+
+        assert_eq!(pbc("0"), Ok(0));
+        assert_eq!(pbc("1"), Ok(1));
+        assert_eq!(pbc("100"), Ok(100));
+        assert_eq!(pbc("1KB"), Ok(1000));
+        assert_eq!(pbc("2MB"), Ok(2000000));
+        assert_eq!(pbc("3GB"), Ok(3000000000));
+        assert_eq!(pbc("4TB"), Ok(4000000000000));
+        assert_eq!(pbc("1k"), Ok(1024));
+        assert_eq!(pbc("10K"), Ok(10240));
+        assert_eq!(pbc("1M"), Ok(1048576));
+        assert_eq!(pbc("1G"), Ok(1073741824));
+        assert_eq!(pbc("1GiB"), Ok(1073741824));
+        assert_eq!(pbc("2TiB"), Ok(2199023255552));
+        assert_eq!(pbc("0xff"), Ok(255));
+        assert_eq!(pbc("0xEE"), Ok(238));
+
+        // empty string is invalid
+        assert!(pbc("").is_err());
+        // leading/trailing space is invalid
+        assert!(pbc(" 0").is_err());
+        assert!(pbc("0 ").is_err());
+        // invalid suffix
+        assert!(pbc("1234asdf").is_err());
+        // bad numbers
+        assert!(pbc("asdf1234").is_err());
+        assert!(pbc("a1s2d3f4").is_err());
+        // multiplication overflows u64
+        assert!(pbc("20000000TiB").is_err());
     }
 }

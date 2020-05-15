@@ -1,16 +1,13 @@
 #[macro_use]
 extern crate clap;
 
-use atty;
-
 use std::fs::File;
 use std::io::{self, prelude::*, SeekFrom};
 
+use atty::{self, Stream};
 use clap::{App, AppSettings, Arg};
 
-use atty::Stream;
-
-use hexyl::{BorderStyle, Input, Printer};
+use hexyl::{parse_byte_count, BorderStyle, Input, Printer};
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = App::new(crate_name!())
@@ -20,6 +17,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .setting(AppSettings::UnifiedHelpMessage)
         .version(crate_version!())
         .about(crate_description!())
+        .after_help(
+            "The N value of --length, --bytes, --skip, and --display-offset can be \
+             either a hexadecimal integer prefixed with \"0x\", or a decimal integer \
+             optionally suffixed with:\n \
+             * \"b\" (or \"B\") for single bytes\n \
+             * \"kB\" (or \"KB\"), \"MB\", \"GB\", or \"TB\" for SI powers of 10 \
+               (1000, 1000*1000, etc)\n \
+             * \"k\" (or \"K\"), \"M\", \"G\", or \"T\" for binary power of 2 (1024, 1024*1024, etc)\n \
+             * \"KiB\", \"MiB\", etc are aliases for binary suffixes",
+        )
         .arg(Arg::with_name("file").help("File to display"))
         .arg(
             Arg::with_name("length")
@@ -80,7 +87,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .short("o")
                 .long("display-offset")
                 .takes_value(true)
-                .value_name("OFFSET")
+                .value_name("N")
                 .help("Add OFFSET to the displayed file position."),
         );
 
@@ -93,15 +100,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         None => Input::Stdin(stdin.lock()),
     };
 
-    let skip_arg = matches.value_of("skip").and_then(parse_hex_or_int);
+    let skip_arg = match matches.value_of("skip") {
+        Some(skip) => Some(parse_byte_count(skip)?),
+        None => None,
+    };
 
     if let Some(skip) = skip_arg {
         reader.seek(SeekFrom::Start(skip))?;
     }
 
-    let length_arg = matches.value_of("length").or(matches.value_of("bytes"));
+    let length_arg = matches
+        .value_of("length")
+        .or_else(|| matches.value_of("bytes"));
 
-    let mut reader = if let Some(length) = length_arg.and_then(parse_hex_or_int) {
+    let mut reader = if let Some(length) = length_arg {
+        let length = parse_byte_count(length)?;
         Box::new(reader.take(length))
     } else {
         reader.into_inner()
@@ -121,10 +134,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let squeeze = !matches.is_present("nosqueezing");
 
-    let display_offset = matches
-        .value_of("display_offset")
-        .and_then(parse_hex_or_int)
-        .unwrap_or(skip_arg.unwrap_or(0));
+    let display_offset_arg = match matches.value_of("display_offset") {
+        Some(offset) => Some(parse_byte_count(offset)?),
+        None => None,
+    };
+
+    let display_offset = display_offset_arg.unwrap_or_else(|| skip_arg.unwrap_or(0));
 
     let stdout = io::stdout();
     let mut stdout_lock = stdout.lock();
@@ -158,13 +173,5 @@ fn main() {
             eprintln!("Error: {}", err);
         }
         std::process::exit(1);
-    }
-}
-
-fn parse_hex_or_int(n: &str) -> Option<u64> {
-    if n.starts_with("0x") {
-        u64::from_str_radix(n.trim_start_matches("0x"), 16).ok()
-    } else {
-        n.parse::<u64>().ok()
     }
 }
