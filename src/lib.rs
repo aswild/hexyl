@@ -7,7 +7,6 @@ use std::io::{self, Read, Write};
 
 use ansi_term::Color;
 use ansi_term::Color::Fixed;
-use regex::Regex;
 
 use crate::squeezer::{SqueezeAction, Squeezer};
 
@@ -450,21 +449,22 @@ pub fn parse_byte_count(input: &str) -> Result<u64, String> {
     // handle hex strings first, they have a prefix of '0x' and no suffixes are allowed
     if input.starts_with("0x") {
         return u64::from_str_radix(input.trim_start_matches("0x"), 16)
-            .map_err(|e| format!("failed to parse '{}' as a hex byte count: {}", input, e));
+            .map_err(|e| format!("failed to parse hex byte count '{}': {}", input, e));
     }
 
-    // regex to parse a decimal number followed by an optional alpha suffix.
-    let re = Regex::new(r"^(?P<num>[0-9]+)(?P<suffix>[A-Za-z]*)$").unwrap();
-    let caps = re
-        .captures(input)
-        .ok_or_else(|| format!("invalid byte count format: '{}'", input))?;
+    // Manually match and split approximately /([0-9]+)([A-Za-z]*)/ without using regex.
+    // The suffix is found by splitting the string at the first ASCII alpha char,
+    // everything before that is the "number".  This doesn't strictly match that regex,
+    // but the u64 conversion validates the number and the suffix is matched against
+    // a fixed list, so it works here.
+    let (num_str, suffix) = input
+        .find(|c: char| c.is_ascii_alphabetic())
+        .map(|suffix_start| input.split_at(suffix_start)) // match found, split the string
+        .unwrap_or((input, "")); // or no match, suffix is empty and num is the whole input
 
-    // Both groups will always match so we can immediately unwrap them and get the matching string
-    let num = caps.name("num").unwrap().as_str();
-    let suffix = caps.name("suffix").unwrap().as_str();
-
-    let num = u64::from_str_radix(num, 10)
-        .map_err(|e| format!("failed to parse byte count '{}': {}", num, e))?;
+    // parse the number into a u64, this will check that it's actually a vaild number
+    let num = u64::from_str_radix(num_str, 10)
+        .map_err(|e| format!("failed to parse byte count '{}': {}", num_str, e))?;
 
     let multiplier: u64 = match suffix {
         // a single byte

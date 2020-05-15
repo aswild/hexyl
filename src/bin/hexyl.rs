@@ -19,8 +19,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .about(crate_description!())
         .after_help(
             "The N value of --length, --bytes, --skip, and --display-offset can be \
-             either a hexadecimal integer prefixed with \"0x\", or a decimal integer \
-             optionally suffixed with:\n \
+             either a hexadecimal integer prefixed with \"0x\" and no suffix, or a \
+             decimal integer optionally suffixed with:\n \
              * \"b\" (or \"B\") for single bytes\n \
              * \"kB\" (or \"KB\"), \"MB\", \"GB\", or \"TB\" for SI powers of 10 \
                (1000, 1000*1000, etc)\n \
