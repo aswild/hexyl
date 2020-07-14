@@ -334,6 +334,10 @@ fn parse_byte_count(n: &str, block_size: PositiveI64) -> Result<PositiveI64, Byt
                 ("mib", 1024i64.pow(2)),
                 ("gib", 1024i64.pow(3)),
                 ("tib", 1024i64.pow(4)),
+                ("k", 1024i64.pow(1)),
+                ("m", 1024i64.pow(2)),
+                ("g", 1024i64.pow(3)),
+                ("t", 1024i64.pow(4)),
                 ("block", block_size.into_inner()),
             ]
             .iter()
@@ -406,6 +410,8 @@ fn test_parse_byte_count() {
     success!("4TB", 4000000000000);
     success!("+4TB", 4000000000000);
 
+    success!("1k", 1024);
+    success!("2M", 2097152);
     success!("1GiB", 1073741824);
     success!("2TiB", 2199023255552);
     success!("+2TiB", 2199023255552);
@@ -424,9 +430,10 @@ fn test_parse_byte_count() {
     // These are also bad.
     error!("+", EmptyAfterSign);
     error!("-", Negative);
-    error!("K", InvalidNumAndUnit("K".to_owned()));
-    error!("k", InvalidNumAndUnit("k".to_owned()));
-    error!("m", InvalidNumAndUnit("m".to_owned()));
+    error!("a", InvalidNumAndUnit("a".to_owned()));
+    error!("K", EmptyWithUnit("K".to_owned()));
+    error!("k", EmptyWithUnit("k".to_owned()));
+    error!("m", EmptyWithUnit("m".to_owned()));
     error!("block", EmptyWithUnit("block".to_owned()));
     // leading/trailing space is invalid
     error!(" 0", InvalidNumAndUnit(" 0".to_owned()));
