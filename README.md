@@ -84,6 +84,14 @@ apt install hexyl
 nix-env -i hexyl
 ```
 
+### Via Guix
+
+```
+guix package -i hexyl
+```
+
+Or add the `hexyl` package in the list of packages to be installed in your system configuration (e.g., `/etc/config.scm`).
+
 ### On other distributions
 
 Check out the [release page](https://github.com/sharkdp/hexyl/releases) for binary builds.
@@ -96,10 +104,18 @@ or Windows Terminal since Windows 10 1903).
 
 ### Via cargo
 
-If you have Rust 1.36 or higher, you can install `hexyl` from source via `cargo`:
+If you have Rust 1.39 or higher, you can install `hexyl` from source via `cargo`:
 ```
 cargo install hexyl
 ```
+
+### Via snap package
+
+```
+sudo snap install hexyl
+```
+
+[Get it from the Snap Store](https://snapcraft.io/hexyl)
 
 ## License
 
