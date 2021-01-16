@@ -221,8 +221,7 @@ fn run() -> Result<(), AnyhowError> {
             ))
         })
         .transpose()?
-        .unwrap_or(0)
-        .into();
+        .unwrap_or(0);
 
     let stdout = io::stdout();
 
@@ -472,8 +471,7 @@ fn parse_byte_offset(n: &str, block_size: PositiveI64) -> Result<ByteOffset, Byt
         })
     };
 
-    if n.starts_with(HEX_PREFIX) {
-        let n = &n[HEX_PREFIX.len()..];
+    if let Some(n) = n.strip_prefix(HEX_PREFIX) {
         let mut chars = n.chars();
         match chars.next() {
             Some(c @ '+') | Some(c @ '-') => {
@@ -528,7 +526,7 @@ fn parse_byte_offset(n: &str, block_size: PositiveI64) -> Result<ByteOffset, Byt
     match (num.parse::<i64>(), unit) {
         (Ok(num), Ok((_raw_unit, unit_multiplier))) => num
             .checked_mul(unit_multiplier)
-            .ok_or_else(|| UnitMultiplicationOverflow)
+            .ok_or(UnitMultiplicationOverflow)
             .and_then(into_byte_offset),
         (Ok(_), Err(e)) => Err(e),
         (Err(e), Ok((raw_unit, _unit_multiplier))) => match raw_unit {
