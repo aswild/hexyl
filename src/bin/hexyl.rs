@@ -2,8 +2,12 @@
 extern crate clap;
 
 use std::convert::TryFrom;
+use std::env;
+use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{self, prelude::*, SeekFrom};
+use std::io::{self, prelude::*, SeekFrom, StdoutLock};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
 
 use clap::{App, AppSettings, Arg};
 
@@ -117,7 +121,11 @@ fn run() -> Result<(), AnyhowError> {
                     A negative value is valid and calculates an offset relative to the \
                     end of the file.",
                 ),
-        );
+        )
+        .arg(Arg::with_name("pager").short("p").long("pager").help(
+            "Spawn a pager to hold the output. The pager command is set by the \
+            environment variables HEXYL_PAGER or PAGER, or defaults to `less`.",
+        ));
 
     let matches = app.get_matches_safe()?;
 
@@ -217,11 +225,23 @@ fn run() -> Result<(), AnyhowError> {
         .into();
 
     let stdout = io::stdout();
-    let mut stdout_lock = stdout.lock();
 
-    let mut printer = Printer::new(&mut stdout_lock, show_color, border_style, squeeze);
+    let mut output = if matches.is_present("pager") {
+        if !atty::is(Stream::Stdout) {
+            return Err(anyhow!("can't use a pager when stdout is not a TTY"));
+        }
+        let pager = env::var_os("HEXYL_PAGER")
+            .unwrap_or_else(|| env::var_os("PAGER").unwrap_or_else(|| "less".into()));
+        spawn_pager(&pager)?
+    } else {
+        Output::Stdout(stdout.lock())
+    };
+
+    let mut printer = Printer::new(&mut output, show_color, border_style, squeeze);
     printer.display_offset(skip_offset + display_offset);
     printer.print_all(&mut reader).map_err(|e| anyhow!(e))?;
+
+    output.wait()?;
 
     Ok(())
 }
@@ -249,6 +269,70 @@ fn main() {
         }
         std::process::exit(1);
     }
+}
+
+enum Output<'a> {
+    Stdout(StdoutLock<'a>),
+    Pager(Child),
+}
+
+impl<'a> Output<'a> {
+    fn wait(&mut self) -> Result<(), AnyhowError> {
+        // flush output, just in case
+        let _ = self.flush();
+        match self {
+            Self::Stdout(_) => Ok(()),
+            Self::Pager(child) => {
+                // note: wait will close the stdin pipe for us before actually waiting
+                let status = child.wait().context("failed to wait for pager process")?;
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(anyhow!("pager process returned {}", status))
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Write for Output<'a> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Stdout(stdout) => stdout.write(buf),
+            // note: Write is implemented for &ChildStdin, so mut child isn't needed
+            Self::Pager(child) => child
+                .stdin
+                .as_ref()
+                .expect("Output::Pager Child has no stdin")
+                .write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Stdout(stdout) => stdout.flush(),
+            Self::Pager(child) => child
+                .stdin
+                .as_ref()
+                .expect("Output::Pager Child has no stdin")
+                .flush(),
+        }
+    }
+}
+
+fn spawn_pager<'a, 'b>(pager: &'a OsStr) -> Result<Output<'b>, AnyhowError> {
+    let mut cmd = Command::new(pager);
+    cmd.stdin(Stdio::piped());
+    if Path::new(pager).file_stem().map(|s| s.to_str()) == Some(Some("less")) {
+        // this is buggy on less versions before 530, but include this option unconditionally for
+        // simplicity and assume a new enough system
+        cmd.arg("--quit-if-one-screen");
+    }
+
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("Failed to spawn pager '{}'", pager.to_string_lossy()))?;
+    Ok(Output::Pager(child))
 }
 
 #[derive(Clone, Copy, Debug, Default, Hash, Eq, Ord, PartialEq, PartialOrd)]
