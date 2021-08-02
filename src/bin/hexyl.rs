@@ -40,7 +40,8 @@ fn run() -> Result<(), AnyhowError> {
                 .value_name("N")
                 .help(
                     "Only read N bytes from the input. The N argument can also include a \
-                     unit with a decimal prefix (kB, MB, ..) or binary prefix (kiB, MiB, ..).\n\
+                     unit with a decimal prefix (kB, MB, ..) or binary prefix (kiB, MiB, ..). \
+                     The short option '-l' can be used as an alias.\n\
                      Examples: --length=64, --length=4KiB",
                 ),
         )
@@ -52,6 +53,14 @@ fn run() -> Result<(), AnyhowError> {
                 .value_name("N")
                 .conflicts_with("length")
                 .help("An alias for -n/--length"),
+        )
+        .arg(
+            Arg::with_name("count")
+                .short("l")
+                .takes_value(true)
+                .value_name("N")
+                .hidden(true)
+                .help("Yet another alias for -n/--length"),
         )
         .arg(
             Arg::with_name("skip")
@@ -185,6 +194,7 @@ fn run() -> Result<(), AnyhowError> {
     let mut reader = if let Some(length) = matches
         .value_of("length")
         .or_else(|| matches.value_of("bytes"))
+        .or_else(|| matches.value_of("count"))
         .map(|s| {
             parse_byte_count(s).context(anyhow!(
                 "failed to parse `--length` arg {:?} as byte count",
@@ -254,11 +264,16 @@ fn main() {
 
     if let Err(err) = result {
         if let Some(clap_err) = err.downcast_ref::<clap::Error>() {
-            eprint!("{}", clap_err); // Clap errors already have newlines
-
             match clap_err.kind {
                 // The exit code should not indicate an error for --help / --version
-                clap::ErrorKind::HelpDisplayed | clap::ErrorKind::VersionDisplayed => {
+                clap::ErrorKind::HelpDisplayed => {
+                    eprint!("{}", clap_err); // Clap errors already have newlines
+                    std::process::exit(0)
+                }
+                clap::ErrorKind::VersionDisplayed => {
+                    // Version output in clap 2.33.1 (dep as of now) doesn't have a newline
+                    // and the fix is not included even in the latest stable release
+                    println!("");
                     std::process::exit(0)
                 }
                 _ => (),
