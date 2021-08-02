@@ -12,19 +12,24 @@ edition = "2018"
 
 [dependencies]
 ansi_term = "0.12"
-anyhow = "1.0.31"
-atty = "0.2"
+anyhow = { version = "1.0.31", optional = true }
+atty = { version = "0.2", optional = true }
 libc = "0.2"
-thiserror = "1.0.19"
+thiserror = { version = "1.0.19", optional = true }
 
 [dependencies.clap]
 version = "2"
 default-features = false
 features = ["suggestions", "color", "wrap_help"]
+optional = true
 
 [dev-dependencies]
 assert_cmd = "1.0"
 predicates = "2.0"
+
+[features]
+default = ["cli"]
+cli = ["anyhow", "atty", "clap", "thiserror"]
 
 [profile.release]
 lto = true
