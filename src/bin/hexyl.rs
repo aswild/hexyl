@@ -273,7 +273,7 @@ fn main() {
                 clap::ErrorKind::VersionDisplayed => {
                     // Version output in clap 2.33.1 (dep as of now) doesn't have a newline
                     // and the fix is not included even in the latest stable release
-                    println!("");
+                    println!();
                     std::process::exit(0)
                 }
                 _ => (),
@@ -366,9 +366,9 @@ impl NonNegativeI64 {
     }
 }
 
-impl Into<u64> for NonNegativeI64 {
-    fn into(self) -> u64 {
-        u64::try_from(self.0)
+impl From<NonNegativeI64> for u64 {
+    fn from(n: NonNegativeI64) -> u64 {
+        u64::try_from(n.0)
             .expect("invariant broken: NonNegativeI64 should contain a non-negative i64 value")
     }
 }
@@ -390,9 +390,9 @@ impl PositiveI64 {
     }
 }
 
-impl Into<u64> for PositiveI64 {
-    fn into(self) -> u64 {
-        u64::try_from(self.0)
+impl From<PositiveI64> for u64 {
+    fn from(n: PositiveI64) -> u64 {
+        u64::try_from(n.0)
             .expect("invariant broken: PositiveI64 should contain a positive i64 value")
     }
 }
