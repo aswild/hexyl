@@ -280,7 +280,10 @@ fn main() {
                 _ => (),
             }
         } else {
-            eprintln!("Error: {:?}", err);
+            match err.downcast_ref::<io::Error>() {
+                Some(io_err) if io_err.kind() == io::ErrorKind::BrokenPipe => (),
+                _ => eprintln!("Error: {:?}", err),
+            }
         }
         std::process::exit(1);
     }
