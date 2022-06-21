@@ -6,35 +6,38 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, prelude::*, SeekFrom, StdoutLock};
+use std::num::NonZeroI64;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
-use clap::{App, AppSettings, Arg};
+use clap::{crate_name, crate_version, AppSettings, Arg, ColorChoice};
 
 use atty::Stream;
 
 use anyhow::{anyhow, Context, Error as AnyhowError};
 
+use const_format::formatcp;
+
 use thiserror::Error as ThisError;
 
 use hexyl::{BorderStyle, Input, Printer};
 
+const DEFAULT_BLOCK_SIZE: i64 = 512;
+
 fn run() -> Result<(), AnyhowError> {
-    let app = App::new(crate_name!())
-        .setting(AppSettings::ColorAuto)
-        .setting(AppSettings::ColoredHelp)
+    let command = clap::Command::new(crate_name!())
         .setting(AppSettings::DeriveDisplayOrder)
-        .setting(AppSettings::UnifiedHelpMessage)
+        .color(ColorChoice::Auto)
         .max_term_width(90)
         .version(crate_version!())
         .about(crate_description!())
         .arg(
-            Arg::with_name("FILE")
+            Arg::new("FILE")
                 .help("The file to display. If no FILE argument is given, read from STDIN."),
         )
         .arg(
-            Arg::with_name("length")
-                .short("n")
+            Arg::new("length")
+                .short('n')
                 .long("length")
                 .takes_value(true)
                 .value_name("N")
@@ -47,8 +50,8 @@ fn run() -> Result<(), AnyhowError> {
                 ),
         )
         .arg(
-            Arg::with_name("bytes")
-                .short("c")
+            Arg::new("bytes")
+                .short('c')
                 .long("bytes")
                 .takes_value(true)
                 .value_name("N")
@@ -56,16 +59,17 @@ fn run() -> Result<(), AnyhowError> {
                 .help("An alias for -n/--length"),
         )
         .arg(
-            Arg::with_name("count")
-                .short("l")
+            Arg::new("count")
+                .short('l')
                 .takes_value(true)
                 .value_name("N")
-                .hidden(true)
+                .conflicts_with_all(&["length", "bytes"])
+                .hide(true)
                 .help("Yet another alias for -n/--length"),
         )
         .arg(
-            Arg::with_name("skip")
-                .short("s")
+            Arg::new("skip")
+                .short('s')
                 .long("skip")
                 .takes_value(true)
                 .value_name("N")
@@ -76,18 +80,19 @@ fn run() -> Result<(), AnyhowError> {
                 ),
         )
         .arg(
-            Arg::with_name("block_size")
+            Arg::new("block_size")
                 .long("block-size")
                 .takes_value(true)
                 .value_name("SIZE")
-                .help(
-                    "Sets the size of the `block` unit to SIZE.\n\
+                .help(formatcp!(
+                    "Sets the size of the `block` unit to SIZE (default is {}).\n\
                      Examples: --block-size=1024, --block-size=4kB",
-                ),
+                    DEFAULT_BLOCK_SIZE
+                )),
         )
         .arg(
-            Arg::with_name("nosqueezing")
-                .short("v")
+            Arg::new("nosqueezing")
+                .short('v')
                 .long("no-squeezing")
                 .help(
                     "Displays all input data. Otherwise any number of groups of output \
@@ -96,23 +101,28 @@ fn run() -> Result<(), AnyhowError> {
                 ),
         )
         .arg(
-            Arg::with_name("color")
+            Arg::new("color")
                 .long("color")
                 .takes_value(true)
                 .value_name("WHEN")
                 .possible_values(&["always", "auto", "never"])
+                .default_value_if("plain", None, Some("never"))
                 .default_value("always")
                 .help(
                     "When to use colors. The auto-mode only displays colors if the output \
                      goes to an interactive terminal",
                 ),
         )
+        .arg(Arg::new("plain").long("plain").help(
+            "Display output with --no-characters, --no-position, --border=none, and --color=never.",
+        ))
         .arg(
-            Arg::with_name("border")
+            Arg::new("border")
                 .long("border")
                 .takes_value(true)
                 .value_name("STYLE")
                 .possible_values(&["unicode", "ascii", "none"])
+                .default_value_if("plain", None, Some("none"))
                 .default_value("unicode")
                 .help(
                     "Whether to draw a border with Unicode characters, ASCII characters, \
@@ -120,8 +130,20 @@ fn run() -> Result<(), AnyhowError> {
                 ),
         )
         .arg(
-            Arg::with_name("display_offset")
-                .short("o")
+            Arg::new("no_chars")
+                .short('C')
+                .long("no-characters")
+                .help("Whether to display the character panel on the right."),
+        )
+        .arg(
+            Arg::new("no_position")
+                .short('P')
+                .long("no-position")
+                .help("Whether to display the position panel on the left."),
+        )
+        .arg(
+            Arg::new("display_offset")
+                .short('o')
                 .long("display-offset")
                 .takes_value(true)
                 .value_name("N")
@@ -132,12 +154,12 @@ fn run() -> Result<(), AnyhowError> {
                     end of the file.",
                 ),
         )
-        .arg(Arg::with_name("pager").short("p").long("pager").help(
+        .arg(Arg::with_name("pager").short('p').long("pager").help(
             "Spawn a pager to hold the output. The pager command is set by the \
             environment variables HEXYL_PAGER or PAGER, or defaults to `less`.",
         ));
 
-    let matches = app.get_matches_safe()?;
+    let matches = command.get_matches();
 
     let stdin = io::stdin();
 
@@ -149,12 +171,27 @@ fn run() -> Result<(), AnyhowError> {
     let block_size = matches
         .value_of("block_size")
         .map(|bs| {
-            bs.parse::<i64>().map_err(|e| anyhow!(e)).and_then(|x| {
-                PositiveI64::new(x).ok_or_else(|| anyhow!("block size argument must be positive"))
-            })
+            if let Some(hex_number) = try_parse_as_hex_number(bs) {
+                return hex_number.map_err(|e| anyhow!(e)).and_then(|x| {
+                    PositiveI64::new(x)
+                        .ok_or_else(|| anyhow!("block size argument must be positive"))
+                });
+            }
+            let (num, unit) = extract_num_and_unit_from(bs)?;
+            if let Unit::Block { custom_size: _ } = unit {
+                return Err(anyhow!(
+                    "can not use 'block(s)' as a unit to specify block size"
+                ));
+            };
+            num.checked_mul(unit.get_multiplier())
+                .ok_or_else(|| anyhow!(ByteOffsetParseError::UnitMultiplicationOverflow))
+                .and_then(|x| {
+                    PositiveI64::new(x)
+                        .ok_or_else(|| anyhow!("block size argument must be positive"))
+                })
         })
         .transpose()?
-        .unwrap_or_else(|| PositiveI64::new(512).unwrap());
+        .unwrap_or_else(|| PositiveI64::new(DEFAULT_BLOCK_SIZE).unwrap());
 
     let skip_arg = matches
         .value_of("skip")
@@ -223,6 +260,10 @@ fn run() -> Result<(), AnyhowError> {
 
     let squeeze = !matches.is_present("nosqueezing");
 
+    let show_char_panel = !matches.is_present("no_chars") && !matches.is_present("plain");
+
+    let show_position_panel = !matches.is_present("no_position") && !matches.is_present("plain");
+
     let display_offset: u64 = matches
         .value_of("display_offset")
         .map(|s| {
@@ -247,7 +288,14 @@ fn run() -> Result<(), AnyhowError> {
         Output::Stdout(stdout.lock())
     };
 
-    let mut printer = Printer::new(&mut output, show_color, border_style, squeeze);
+    let mut printer = Printer::new(
+        &mut output,
+        show_color,
+        show_char_panel,
+        show_position_panel,
+        border_style,
+        squeeze,
+    );
     printer.display_offset(skip_offset + display_offset);
     printer.print_all(&mut reader).map_err(|e| anyhow!(e))?;
 
@@ -264,26 +312,9 @@ fn main() {
     let result = run();
 
     if let Err(err) = result {
-        if let Some(clap_err) = err.downcast_ref::<clap::Error>() {
-            match clap_err.kind {
-                // The exit code should not indicate an error for --help / --version
-                clap::ErrorKind::HelpDisplayed => {
-                    eprint!("{}", clap_err); // Clap errors already have newlines
-                    std::process::exit(0)
-                }
-                clap::ErrorKind::VersionDisplayed => {
-                    // Version output in clap 2.33.1 (dep as of now) doesn't have a newline
-                    // and the fix is not included even in the latest stable release
-                    println!();
-                    std::process::exit(0)
-                }
-                _ => (),
-            }
-        } else {
-            match err.downcast_ref::<io::Error>() {
-                Some(io_err) if io_err.kind() == io::ErrorKind::BrokenPipe => (),
-                _ => eprintln!("Error: {:?}", err),
-            }
+        match err.downcast_ref::<io::Error>() {
+            Some(io_err) if io_err.kind() == io::ErrorKind::BrokenPipe => (),
+            _ => eprintln!("Error: {:?}", err),
         }
         std::process::exit(1);
     }
@@ -371,8 +402,8 @@ impl NonNegativeI64 {
 }
 
 impl From<NonNegativeI64> for u64 {
-    fn from(n: NonNegativeI64) -> u64 {
-        u64::try_from(n.0)
+    fn from(x: NonNegativeI64) -> u64 {
+        u64::try_from(x.0)
             .expect("invariant broken: NonNegativeI64 should contain a non-negative i64 value")
     }
 }
@@ -395,9 +426,46 @@ impl PositiveI64 {
 }
 
 impl From<PositiveI64> for u64 {
-    fn from(n: PositiveI64) -> u64 {
-        u64::try_from(n.0)
+    fn from(x: PositiveI64) -> u64 {
+        u64::try_from(x.0)
             .expect("invariant broken: PositiveI64 should contain a positive i64 value")
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Unit {
+    Byte,
+    Kilobyte,
+    Megabyte,
+    Gigabyte,
+    Terabyte,
+    Kibibyte,
+    Mebibyte,
+    Gibibyte,
+    Tebibyte,
+    /// a customizable amount of bytes
+    Block {
+        custom_size: Option<NonZeroI64>,
+    },
+}
+
+impl Unit {
+    const fn get_multiplier(self) -> i64 {
+        match self {
+            Self::Byte => 1,
+            Self::Kilobyte => 1000,
+            Self::Megabyte => 1_000_000,
+            Self::Gigabyte => 1_000_000_000,
+            Self::Terabyte => 1_000_000_000_000,
+            Self::Kibibyte => 1 << 10,
+            Self::Mebibyte => 1 << 20,
+            Self::Gibibyte => 1 << 30,
+            Self::Tebibyte => 1 << 40,
+            Self::Block {
+                custom_size: Some(size),
+            } => size.get(),
+            Self::Block { custom_size: None } => DEFAULT_BLOCK_SIZE,
+        }
     }
 }
 
@@ -455,33 +523,14 @@ enum ByteOffsetParseError {
     InvalidUnit(String),
     #[error("failed to parse integer part")]
     ParseNum(#[source] std::num::ParseIntError),
-    #[error("count multipled by the unit overflowed a signed 64-bit integer; are you sure it should be that big?")]
+    #[error("count multiplied by the unit overflowed a signed 64-bit integer; are you sure it should be that big?")]
     UnitMultiplicationOverflow,
 }
 
 fn parse_byte_offset(n: &str, block_size: PositiveI64) -> Result<ByteOffset, ByteOffsetParseError> {
     use ByteOffsetParseError::*;
 
-    let (n, kind) = {
-        let mut chars = n.chars();
-        let next_char = chars.next();
-        let check_empty_after_sign = || {
-            if chars.clone().next().is_none() {
-                Err(EmptyAfterSign)
-            } else {
-                Ok(chars.as_str())
-            }
-        };
-        match next_char {
-            Some('+') => (
-                check_empty_after_sign()?,
-                ByteOffsetKind::ForwardFromLastOffset,
-            ),
-            Some('-') => (check_empty_after_sign()?, ByteOffsetKind::BackwardFromEnd),
-            None => return Err(Empty),
-            _ => (n, ByteOffsetKind::ForwardFromBeginning),
-        }
-    };
+    let (n, kind) = process_sign_of(n)?;
 
     let into_byte_offset = |value| {
         Ok(ByteOffset {
@@ -490,8 +539,103 @@ fn parse_byte_offset(n: &str, block_size: PositiveI64) -> Result<ByteOffset, Byt
         })
     };
 
-    if let Some(n) = n.strip_prefix(HEX_PREFIX) {
-        let mut chars = n.chars();
+    if let Some(hex_number) = try_parse_as_hex_number(n) {
+        return hex_number.map(into_byte_offset)?;
+    }
+
+    let (num, mut unit) = extract_num_and_unit_from(n)?;
+    if let Unit::Block { custom_size: None } = unit {
+        unit = Unit::Block {
+            custom_size: Some(
+                NonZeroI64::new(block_size.into_inner()).expect("PositiveI64 was zero"),
+            ),
+        };
+    }
+
+    num.checked_mul(unit.get_multiplier())
+        .ok_or(UnitMultiplicationOverflow)
+        .and_then(into_byte_offset)
+}
+
+/// Takes a string containing a base-10 number and an optional unit, and returns them with their proper types.
+/// The unit must directly follow the number (e.g. no whitespace is allowed between them).
+/// When no unit is given, [Unit::Byte] is assumed.
+/// When the unit is [Unit::Block], it is returned without custom size.
+/// No normalization is performed, that is "1024" is extracted to (1024, Byte), not (1, Kibibyte).
+fn extract_num_and_unit_from(n: &str) -> Result<(i64, Unit), ByteOffsetParseError> {
+    use ByteOffsetParseError::*;
+    if n.is_empty() {
+        return Err(Empty);
+    }
+    match n.chars().position(|c| !c.is_ascii_digit()) {
+        Some(unit_begin_idx) => {
+            let (n, raw_unit) = n.split_at(unit_begin_idx);
+            let unit = match raw_unit.to_lowercase().as_str() {
+                "" => Unit::Byte, // no "b" => Byte to allow hex nums with units
+                "kb" => Unit::Kilobyte,
+                "mb" => Unit::Megabyte,
+                "gb" => Unit::Gigabyte,
+                "tb" => Unit::Terabyte,
+                "kib" => Unit::Kibibyte,
+                "mib" => Unit::Mebibyte,
+                "gib" => Unit::Gibibyte,
+                "tib" => Unit::Tebibyte,
+                "block" | "blocks" => Unit::Block { custom_size: None },
+                _ => {
+                    return if n.is_empty() {
+                        Err(InvalidNumAndUnit(raw_unit.to_string()))
+                    } else {
+                        Err(InvalidUnit(raw_unit.to_string()))
+                    }
+                }
+            };
+            let num = n.parse::<i64>().map_err(|e| {
+                if n.is_empty() {
+                    EmptyWithUnit(raw_unit.to_owned())
+                } else {
+                    ParseNum(e)
+                }
+            })?;
+            Ok((num, unit))
+        }
+        None => {
+            // no unit part
+            let num = n.parse::<i64>().map_err(ParseNum)?;
+            Ok((num, Unit::Byte))
+        }
+    }
+}
+
+/// Extracts a [ByteOffsetKind] based on the sign at the beginning of the given string.
+/// Returns the input string without the sign (or an equal string if there wasn't any sign).
+fn process_sign_of(n: &str) -> Result<(&str, ByteOffsetKind), ByteOffsetParseError> {
+    use ByteOffsetParseError::*;
+    let mut chars = n.chars();
+    let next_char = chars.next();
+    let check_empty_after_sign = || {
+        if chars.clone().next().is_none() {
+            Err(EmptyAfterSign)
+        } else {
+            Ok(chars.as_str())
+        }
+    };
+    match next_char {
+        Some('+') => Ok((
+            check_empty_after_sign()?,
+            ByteOffsetKind::ForwardFromLastOffset,
+        )),
+        Some('-') => Ok((check_empty_after_sign()?, ByteOffsetKind::BackwardFromEnd)),
+        None => Err(Empty),
+        _ => Ok((n, ByteOffsetKind::ForwardFromBeginning)),
+    }
+}
+
+/// If `n` starts with a hex prefix, its remaining part is returned as some number (if possible),
+/// otherwise None is returned.
+fn try_parse_as_hex_number(n: &str) -> Option<Result<i64, ByteOffsetParseError>> {
+    use ByteOffsetParseError::*;
+    n.strip_prefix(HEX_PREFIX).map(|num| {
+        let mut chars = num.chars();
         match chars.next() {
             Some(c @ '+') | Some(c @ '-') => {
                 return if chars.next().is_none() {
@@ -502,54 +646,70 @@ fn parse_byte_offset(n: &str, block_size: PositiveI64) -> Result<ByteOffset, Byt
             }
             _ => (),
         }
-        return i64::from_str_radix(n, 16)
-            .map(into_byte_offset)
-            .map_err(ParseNum)?;
-    }
+        i64::from_str_radix(num, 16).map_err(ParseNum)
+    })
+}
 
-    let (num, unit) = match n.chars().position(|c| !c.is_ascii_digit()) {
-        Some(unit_begin_idx) => {
-            let (n, raw_unit) = n.split_at(unit_begin_idx);
-            let raw_unit_lower = raw_unit.to_lowercase();
-            let multiplier = [
-                ("b", 1),
-                ("kb", 1000i64.pow(1)),
-                ("mb", 1000i64.pow(2)),
-                ("gb", 1000i64.pow(3)),
-                ("tb", 1000i64.pow(4)),
-                ("kib", 1024i64.pow(1)),
-                ("mib", 1024i64.pow(2)),
-                ("gib", 1024i64.pow(3)),
-                ("tib", 1024i64.pow(4)),
-                ("block", block_size.into_inner()),
-            ]
-            .iter()
-            .cloned()
-            .find_map(|(unit, multiplier)| {
-                if unit == raw_unit_lower {
-                    Some(multiplier)
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| InvalidUnit(raw_unit.to_owned()));
-            (n, multiplier.map(|m| (Some(raw_unit), m)))
-        }
-        None => (n, Ok((None, 1))),
-    };
+#[test]
+fn unit_multipliers() {
+    use Unit::*;
+    assert_eq!(Kilobyte.get_multiplier(), 1000 * Byte.get_multiplier());
+    assert_eq!(Megabyte.get_multiplier(), 1000 * Kilobyte.get_multiplier());
+    assert_eq!(Gigabyte.get_multiplier(), 1000 * Megabyte.get_multiplier());
+    assert_eq!(Terabyte.get_multiplier(), 1000 * Gigabyte.get_multiplier());
 
-    match (num.parse::<i64>(), unit) {
-        (Ok(num), Ok((_raw_unit, unit_multiplier))) => num
-            .checked_mul(unit_multiplier)
-            .ok_or(UnitMultiplicationOverflow)
-            .and_then(into_byte_offset),
-        (Ok(_), Err(e)) => Err(e),
-        (Err(e), Ok((raw_unit, _unit_multiplier))) => match raw_unit {
-            Some(raw_unit) if num.is_empty() => Err(EmptyWithUnit(raw_unit.to_owned())),
-            _ => Err(ParseNum(e)),
-        },
-        (Err(_), Err(_)) => Err(InvalidNumAndUnit(n.to_owned())),
-    }
+    assert_eq!(Kibibyte.get_multiplier(), 1024 * Byte.get_multiplier());
+    assert_eq!(Mebibyte.get_multiplier(), 1024 * Kibibyte.get_multiplier());
+    assert_eq!(Gibibyte.get_multiplier(), 1024 * Mebibyte.get_multiplier());
+    assert_eq!(Tebibyte.get_multiplier(), 1024 * Gibibyte.get_multiplier());
+}
+
+#[test]
+fn test_process_sign() {
+    use ByteOffsetKind::*;
+    use ByteOffsetParseError::*;
+    assert_eq!(process_sign_of("123"), Ok(("123", ForwardFromBeginning)));
+    assert_eq!(process_sign_of("+123"), Ok(("123", ForwardFromLastOffset)));
+    assert_eq!(process_sign_of("-123"), Ok(("123", BackwardFromEnd)));
+    assert_eq!(process_sign_of("-"), Err(EmptyAfterSign));
+    assert_eq!(process_sign_of("+"), Err(EmptyAfterSign));
+    assert_eq!(process_sign_of(""), Err(Empty));
+}
+
+#[test]
+fn test_parse_as_hex() {
+    assert_eq!(try_parse_as_hex_number("73"), None);
+    assert_eq!(try_parse_as_hex_number("0x1337"), Some(Ok(0x1337)));
+    assert!(matches!(try_parse_as_hex_number("0xnope"), Some(Err(_))));
+    assert!(matches!(try_parse_as_hex_number("0x-1"), Some(Err(_))));
+}
+
+#[test]
+fn extract_num_and_unit() {
+    use ByteOffsetParseError::*;
+    use Unit::*;
+    // byte is default unit
+    assert_eq!(extract_num_and_unit_from("4"), Ok((4, Byte)));
+    // blocks are returned without customization
+    assert_eq!(
+        extract_num_and_unit_from("2blocks"),
+        Ok((2, Block { custom_size: None }))
+    );
+    // no normalization is performed
+    assert_eq!(extract_num_and_unit_from("1024kb"), Ok((1024, Kilobyte)));
+
+    // unit without number results in error
+    assert_eq!(
+        extract_num_and_unit_from("gib"),
+        Err(EmptyWithUnit("gib".to_string()))
+    );
+    // empty string results in error
+    assert_eq!(extract_num_and_unit_from(""), Err(Empty));
+    // an invalid unit results in an error
+    assert_eq!(
+        extract_num_and_unit_from("25litres"),
+        Err(InvalidUnit("litres".to_string()))
+    );
 }
 
 #[test]
@@ -558,7 +718,7 @@ fn test_parse_byte_offset() {
 
     macro_rules! success {
         ($input: expr, $expected_kind: ident $expected_value: expr) => {
-            success!($input, $expected_kind $expected_value; block_size: 512)
+            success!($input, $expected_kind $expected_value; block_size: DEFAULT_BLOCK_SIZE)
         };
         ($input: expr, $expected_kind: ident $expected_value: expr; block_size: $block_size: expr) => {
             assert_eq!(
@@ -576,7 +736,7 @@ fn test_parse_byte_offset() {
     macro_rules! error {
         ($input: expr, $expected_err: expr) => {
             assert_eq!(
-                parse_byte_offset($input, PositiveI64::new(512).unwrap()),
+                parse_byte_offset($input, PositiveI64::new(DEFAULT_BLOCK_SIZE).unwrap()),
                 Err($expected_err),
             );
         };

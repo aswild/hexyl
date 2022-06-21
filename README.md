@@ -31,7 +31,7 @@ If you use an older version of Ubuntu, you can download
 the latest `.deb` package from the release page and install it via:
 
 ``` bash
-sudo dpkg -i hexyl_0.9.0_amd64.deb  # adapt version number and architecture
+sudo dpkg -i hexyl_0.10.0_amd64.deb  # adapt version number and architecture
 ```
 
 ### On Debian
@@ -124,9 +124,22 @@ or Windows Terminal since Windows 10 1903).
 
 ### Via cargo
 
-If you have Rust 1.40 or higher, you can install `hexyl` from source via `cargo`:
+If you have Rust 1.56 or higher, you can install `hexyl` from source via `cargo`:
 ```
 cargo install hexyl
+```
+
+Alternatively, you can install `hexyl` directly from the repository by using:
+```
+git clone https://github.com/sharkdp/hexyl
+cargo install --path ./hexyl
+```
+
+Note: To convert the man page, you will need [Pandoc](https://pandoc.org/).
+
+You can convert from Markdown by using (in the project root):
+```
+pandoc -s -f markdown -t man -o ./doc/hexyl.1 ./doc/hexyl.1.md
 ```
 
 ### Via snap package

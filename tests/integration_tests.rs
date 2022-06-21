@@ -85,6 +85,30 @@ mod length {
             .assert()
             .failure();
     }
+
+    #[test]
+    fn fail_if_length_and_count_options_are_used_simultaneously() {
+        hexyl()
+            .arg("hello_world_elf64")
+            .arg("--length=32")
+            .arg("-l=10")
+            .assert()
+            .failure();
+    }
+}
+
+mod bytes {
+    use super::hexyl;
+
+    #[test]
+    fn fail_if_bytes_and_count_options_are_used_simultaneously() {
+        hexyl()
+            .arg("hello_world_elf64")
+            .arg("--bytes=32")
+            .arg("-l=10")
+            .assert()
+            .failure();
+    }
 }
 
 mod skip {
@@ -201,5 +225,49 @@ mod blocksize {
             .arg("--block-size=-16")
             .assert()
             .failure();
+    }
+}
+
+mod display_settings {
+    use super::hexyl;
+
+    #[test]
+    fn plain() {
+        hexyl()
+            .arg("ascii")
+            .arg("--plain")
+            .assert()
+            .success()
+            .stdout("  30 31 32 33 34 35 36 37   38 39 61 62 63 64 65 0a  \n");
+    }
+
+    #[test]
+    fn no_chars() {
+        hexyl()
+            .arg("ascii")
+            .arg("--no-characters")
+            .arg("--color=never")
+            .assert()
+            .success()
+            .stdout(
+                "┌────────┬─────────────────────────┬─────────────────────────┐\n\
+                 │00000000│ 30 31 32 33 34 35 36 37 ┊ 38 39 61 62 63 64 65 0a │\n\
+                 └────────┴─────────────────────────┴─────────────────────────┘\n",
+            );
+    }
+
+    #[test]
+    fn no_position() {
+        hexyl()
+            .arg("ascii")
+            .arg("--no-position")
+            .arg("--color=never")
+            .assert()
+            .success()
+            .stdout(
+                "┌─────────────────────────┬─────────────────────────┬────────┬────────┐\n\
+                 │ 30 31 32 33 34 35 36 37 ┊ 38 39 61 62 63 64 65 0a │01234567┊89abcde_│\n\
+                 └─────────────────────────┴─────────────────────────┴────────┴────────┘\n",
+            );
     }
 }
