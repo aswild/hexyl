@@ -199,7 +199,7 @@ impl<'a, Writer: Write> Printer<'a, Writer> {
         self
     }
 
-    pub fn header(&mut self) -> io::Result<()> {
+    pub fn header(&mut self) {
         if let Some(border_elements) = self.border_style.header_elems() {
             let h = border_elements.horizontal_line;
             let h8 = h.to_string().repeat(8);
@@ -213,12 +213,12 @@ impl<'a, Writer: Write> Printer<'a, Writer> {
                 r = border_elements.right_corner,
                 h8 = h8,
                 h25 = h25
-            )?;
+            )
+            .ok();
         }
-        Ok(())
     }
 
-    pub fn footer(&mut self) -> io::Result<()> {
+    pub fn footer(&mut self) {
         if let Some(border_elements) = self.border_style.footer_elems() {
             let h = border_elements.horizontal_line;
             let h8 = h.to_string().repeat(8);
@@ -232,14 +232,14 @@ impl<'a, Writer: Write> Printer<'a, Writer> {
                 r = border_elements.right_corner,
                 h8 = h8,
                 h25 = h25
-            )?;
+            )
+            .ok();
         }
-        Ok(())
     }
 
-    fn print_position_indicator(&mut self) -> io::Result<()> {
+    fn print_position_indicator(&mut self) {
         if !self.header_was_printed {
-            self.header()?;
+            self.header();
             self.header_was_printed = true;
         }
 
@@ -257,12 +257,11 @@ impl<'a, Writer: Write> Printer<'a, Writer> {
             formatted_string,
             self.border_style.outer_sep()
         );
-        Ok(())
     }
 
     pub fn print_byte(&mut self, b: u8) -> io::Result<()> {
         if self.idx % 16 == 1 {
-            self.print_position_indicator()?;
+            self.print_position_indicator();
         }
 
         write!(&mut self.buffer_line, "{}", self.byte_hex_table[b as usize])?;
@@ -290,7 +289,7 @@ impl<'a, Writer: Write> Printer<'a, Writer> {
 
         if len == 0 {
             if self.squeezer.active() {
-                self.print_position_indicator()?;
+                self.print_position_indicator();
                 let _ = writeln!(
                     &mut self.buffer_line,
                     "{0:1$}{4}{0:2$}{5}{0:3$}{4}{0:3$}{5}",
@@ -406,7 +405,10 @@ impl<'a, Writer: Write> Printer<'a, Writer> {
 
     /// Loop through the given `Reader`, printing until the `Reader` buffer
     /// is exhausted.
-    pub fn print_all<Reader: Read>(&mut self, mut reader: Reader) -> io::Result<()> {
+    pub fn print_all<Reader: Read>(
+        &mut self,
+        mut reader: Reader,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut buffer = [0; BUFFER_SIZE];
         'mainloop: loop {
             let size = reader.read(&mut buffer)?;
@@ -425,16 +427,17 @@ impl<'a, Writer: Write> Printer<'a, Writer> {
         }
 
         // Finish last line
-        self.print_textline()?;
+        self.print_textline().ok();
 
         if !self.header_was_printed() {
-            self.header()?;
+            self.header();
             writeln!(
                 self.writer,
                 "│        │ No content to print     │                         │        │        │"
-            )?;
+            )
+            .ok();
         }
-        self.footer()?;
+        self.footer();
 
         Ok(())
     }
