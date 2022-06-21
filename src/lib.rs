@@ -138,13 +138,13 @@ impl BorderStyle {
     }
 }
 
-pub struct Printer<'a, Writer: Write> {
+pub struct Printer<W: Write> {
     idx: u64,
     /// The raw bytes used as input for the current line.
     raw_line: Vec<u8>,
     /// The buffered line built with each byte, ready to print to writer.
     buffer_line: Vec<u8>,
-    writer: &'a mut Writer,
+    writer: W,
     show_color: bool,
     show_char_panel: bool,
     show_position_panel: bool,
@@ -156,15 +156,19 @@ pub struct Printer<'a, Writer: Write> {
     display_offset: u64,
 }
 
-impl<'a, Writer: Write> Printer<'a, Writer> {
+impl<W: Write> Printer<W> {
+    pub fn with_default_style(writer: W) -> Printer<W> {
+        Self::new(writer, true, true, true, BorderStyle::Unicode, true)
+    }
+
     pub fn new(
-        writer: &'a mut Writer,
+        writer: W,
         show_color: bool,
         show_char_panel: bool,
         show_position_panel: bool,
         border_style: BorderStyle,
         use_squeeze: bool,
-    ) -> Printer<'a, Writer> {
+    ) -> Printer<W> {
         Printer {
             idx: 1,
             raw_line: vec![],
@@ -525,8 +529,7 @@ mod tests {
         .to_owned();
 
         let mut output = vec![];
-        let mut printer: Printer<Vec<u8>> =
-            Printer::new(&mut output, false, true, true, BorderStyle::Unicode, true);
+        let mut printer = Printer::new(&mut output, false, true, true, BorderStyle::Unicode, true);
         printer.display_offset(0xdeadbeef);
 
         printer.print_all(input).unwrap();
