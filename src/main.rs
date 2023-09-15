@@ -1,36 +1,34 @@
-#[macro_use]
-extern crate clap;
-
 use std::convert::TryFrom;
 use std::env;
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{self, prelude::*, SeekFrom, StdoutLock};
-use std::num::NonZeroI64;
+use std::io::{self, prelude::*, IsTerminal, SeekFrom, StdoutLock};
+use std::num::{NonZeroI64, NonZeroU64, NonZeroU8};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
-use clap::{crate_name, crate_version, AppSettings, Arg, ColorChoice};
+use clap::builder::ArgPredicate;
+use clap::{Arg, ArgAction, ColorChoice};
 
-use atty::Stream;
-
-use anyhow::{anyhow, Context, Error as AnyhowError};
+use anyhow::{anyhow, Context, Result};
 
 use const_format::formatcp;
 
 use thiserror::Error as ThisError;
 
-use hexyl::{BorderStyle, Input, Printer};
+use terminal_size::terminal_size;
+
+use hexyl::{Base, BorderStyle, Endianness, Input, PrinterBuilder};
+
+#[cfg(test)]
+mod tests;
 
 const DEFAULT_BLOCK_SIZE: i64 = 512;
 
-fn run() -> Result<(), AnyhowError> {
-    let command = clap::Command::new(crate_name!())
-        .setting(AppSettings::DeriveDisplayOrder)
+fn run() -> Result<()> {
+    let command = clap::command!()
         .color(ColorChoice::Auto)
         .max_term_width(90)
-        .version(crate_version!())
-        .about(crate_description!())
         .arg(
             Arg::new("FILE")
                 .help("The file to display. If no FILE argument is given, read from STDIN."),
@@ -39,7 +37,7 @@ fn run() -> Result<(), AnyhowError> {
             Arg::new("length")
                 .short('n')
                 .long("length")
-                .takes_value(true)
+                .num_args(1)
                 .value_name("N")
                 .help(
                     "Only read N bytes from the input. The N argument can also include a \
@@ -53,7 +51,7 @@ fn run() -> Result<(), AnyhowError> {
             Arg::new("bytes")
                 .short('c')
                 .long("bytes")
-                .takes_value(true)
+                .num_args(1)
                 .value_name("N")
                 .conflicts_with("length")
                 .help("An alias for -n/--length"),
@@ -61,9 +59,9 @@ fn run() -> Result<(), AnyhowError> {
         .arg(
             Arg::new("count")
                 .short('l')
-                .takes_value(true)
+                .num_args(1)
                 .value_name("N")
-                .conflicts_with_all(&["length", "bytes"])
+                .conflicts_with_all(["length", "bytes"])
                 .hide(true)
                 .help("Yet another alias for -n/--length"),
         )
@@ -71,7 +69,7 @@ fn run() -> Result<(), AnyhowError> {
             Arg::new("skip")
                 .short('s')
                 .long("skip")
-                .takes_value(true)
+                .num_args(1)
                 .value_name("N")
                 .help(
                     "Skip the first N bytes of the input. The N argument can also include \
@@ -82,7 +80,7 @@ fn run() -> Result<(), AnyhowError> {
         .arg(
             Arg::new("block_size")
                 .long("block-size")
-                .takes_value(true)
+                .num_args(1)
                 .value_name("SIZE")
                 .help(formatcp!(
                     "Sets the size of the `block` unit to SIZE (default is {}).\n\
@@ -94,6 +92,7 @@ fn run() -> Result<(), AnyhowError> {
             Arg::new("nosqueezing")
                 .short('v')
                 .long("no-squeezing")
+                .action(ArgAction::SetFalse)
                 .help(
                     "Displays all input data. Otherwise any number of groups of output \
                      lines which would be identical to the preceding group of lines, are \
@@ -103,49 +102,58 @@ fn run() -> Result<(), AnyhowError> {
         .arg(
             Arg::new("color")
                 .long("color")
-                .takes_value(true)
+                .num_args(1)
                 .value_name("WHEN")
-                .possible_values(&["always", "auto", "never"])
-                .default_value_if("plain", None, Some("never"))
+                .value_parser(["always", "auto", "never"])
+                .default_value_if("plain", ArgPredicate::IsPresent, Some("never"))
                 .default_value("always")
                 .help(
                     "When to use colors. The auto-mode only displays colors if the output \
                      goes to an interactive terminal",
                 ),
         )
-        .arg(Arg::new("plain").long("plain").help(
-            "Display output with --no-characters, --no-position, --border=none, and --color=never.",
-        ))
         .arg(
             Arg::new("border")
                 .long("border")
-                .takes_value(true)
+                .num_args(1)
                 .value_name("STYLE")
-                .possible_values(&["unicode", "ascii", "none"])
-                .default_value_if("plain", None, Some("none"))
+                .value_parser(["unicode", "ascii", "none"])
+                .default_value_if("plain", ArgPredicate::IsPresent, Some("none"))
                 .default_value("unicode")
                 .help(
                     "Whether to draw a border with Unicode characters, ASCII characters, \
                     or none at all",
                 ),
         )
+        .arg(Arg::new("plain").long("plain").action(ArgAction::SetTrue).help(
+            "Display output with --no-characters, --no-position, --border=none, and --color=never.",
+        ))
         .arg(
             Arg::new("no_chars")
-                .short('C')
                 .long("no-characters")
-                .help("Whether to display the character panel on the right."),
+                .action(ArgAction::SetFalse)
+                .help("Do not show the character panel on the right."),
+        )
+        .arg(
+            Arg::new("chars")
+                .short('C')
+                .long("characters")
+                .overrides_with("no_chars")
+                .action(ArgAction::SetTrue)
+                .help("Show the character panel on the right. This is the default, unless --no-characters has been specified."),
         )
         .arg(
             Arg::new("no_position")
                 .short('P')
                 .long("no-position")
+                .action(ArgAction::SetFalse)
                 .help("Whether to display the position panel on the left."),
         )
         .arg(
             Arg::new("display_offset")
                 .short('o')
                 .long("display-offset")
-                .takes_value(true)
+                .num_args(1)
                 .value_name("N")
                 .help(
                     "Add N bytes to the displayed file position. The N argument can also \
@@ -154,22 +162,97 @@ fn run() -> Result<(), AnyhowError> {
                     end of the file.",
                 ),
         )
-        .arg(Arg::with_name("pager").short('p').long("pager").help(
+        .arg(Arg::new("pager").short('p').long("pager").action(ArgAction::SetTrue).help(
             "Spawn a pager to hold the output. The pager command is set by the \
             environment variables HEXYL_PAGER or PAGER, or defaults to `less`.",
-        ));
+        ))
+        .arg(
+            Arg::new("panels")
+                .long("panels")
+                .num_args(1)
+                .value_name("N")
+                .help(
+                    "Sets the number of hex data panels to be displayed. \
+                    `--panels=auto` will display the maximum number of hex data panels \
+                    based on the current terminal width. By default, hexyl will show \
+                    two panels, unless the terminal is not wide enough for that.",
+                ),
+        )
+        .arg(
+            Arg::new("group_size")
+                .short('g')
+                .long("group-size")
+                .alias("groupsize")
+                .num_args(1)
+                .value_name("N")
+                .help(
+                    "Number of bytes/octets that should be grouped together. \
+                    Possible group sizes are 1, 2, 4, 8. The default is 1. You \
+                    can use the '--endianness' option to control the ordering of \
+                    the bytes within a group. '--groupsize' can be used as an \
+                    alias (xxd-compatibility).",
+                ),
+        )
+        .arg(
+            Arg::new("endianness")
+                .long("endianness")
+                .num_args(1)
+                .value_name("FORMAT")
+                .value_parser(["big", "little"])
+                .default_value("big")
+                .help(
+                    "Whether to print out groups in little-endian or big-endian \
+                     format. This option only has an effect if the '--group-size' \
+                     is larger than 1. '-e' can be used as an alias for \
+                     '--endianness=little'.",
+                ),
+        )
+        .arg(
+            Arg::new("little_endian_format")
+                .short('e')
+                .action(ArgAction::SetTrue)
+                .overrides_with("endianness")
+                .hide(true)
+                .help("An alias for '--endianness=little'."),
+        )
+        .arg(
+            Arg::new("base")
+                .short('b')
+                .long("base")
+                .num_args(1)
+                .value_name("B")
+                .help(
+                    "Sets the base used for the bytes. The possible options are \
+                    binary, octal, decimal, and hexadecimal. The default base \
+                    is hexadecimal."
+                )
+        )
+        .arg(
+            Arg::new("terminal_width")
+                .long("terminal-width")
+                .num_args(1)
+                .value_name("N")
+                .conflicts_with("panels")
+                .help(
+                    "Sets the number of terminal columns to be displayed.\nSince the terminal \
+                    width may not be an evenly divisible by the width per hex data column, this \
+                    will use the greatest number of hex data panels that can fit in the requested \
+                    width but still leave some space to the right.\nCannot be used with other \
+                    width-setting options.",
+                ),
+        );
 
     let matches = command.get_matches();
 
     let stdin = io::stdin();
 
-    let mut reader = match matches.value_of("FILE") {
+    let mut reader = match matches.get_one::<String>("FILE") {
         Some(filename) => Input::File(File::open(filename)?),
         None => Input::Stdin(stdin.lock()),
     };
 
     let block_size = matches
-        .value_of("block_size")
+        .get_one::<String>("block_size")
         .map(|bs| {
             if let Some(hex_number) = try_parse_as_hex_number(bs) {
                 return hex_number.map_err(|e| anyhow!(e)).and_then(|x| {
@@ -194,7 +277,7 @@ fn run() -> Result<(), AnyhowError> {
         .unwrap_or_else(|| PositiveI64::new(DEFAULT_BLOCK_SIZE).unwrap());
 
     let skip_arg = matches
-        .value_of("skip")
+        .get_one::<String>("skip")
         .map(|s| {
             parse_byte_offset(s, block_size).context(anyhow!(
                 "failed to parse `--skip` arg {:?} as byte count",
@@ -223,16 +306,16 @@ fn run() -> Result<(), AnyhowError> {
         0
     };
 
-    let parse_byte_count = |s| -> Result<u64, AnyhowError> {
+    let parse_byte_count = |s| -> Result<u64> {
         Ok(parse_byte_offset(s, block_size)?
             .assume_forward_offset_from_start()?
             .into())
     };
 
     let mut reader = if let Some(length) = matches
-        .value_of("length")
-        .or_else(|| matches.value_of("bytes"))
-        .or_else(|| matches.value_of("count"))
+        .get_one::<String>("length")
+        .or_else(|| matches.get_one::<String>("bytes"))
+        .or_else(|| matches.get_one::<String>("count"))
         .map(|s| {
             parse_byte_count(s).context(anyhow!(
                 "failed to parse `--length` arg {:?} as byte count",
@@ -246,26 +329,30 @@ fn run() -> Result<(), AnyhowError> {
         reader.into_inner()
     };
 
-    let show_color = match matches.value_of("color") {
+    let show_color = match matches.get_one::<String>("color").map(String::as_ref) {
         Some("never") => false,
-        Some("auto") => atty::is(Stream::Stdout),
-        _ => true,
+        Some("always") => true,
+        _ => supports_color::on(supports_color::Stream::Stdout)
+            .map(|level| level.has_basic)
+            .unwrap_or(false),
     };
 
-    let border_style = match matches.value_of("border") {
+    let border_style = match matches.get_one::<String>("border").map(String::as_ref) {
         Some("unicode") => BorderStyle::Unicode,
         Some("ascii") => BorderStyle::Ascii,
         _ => BorderStyle::None,
     };
 
-    let squeeze = !matches.is_present("nosqueezing");
+    let &squeeze = matches.get_one::<bool>("nosqueezing").unwrap_or(&true);
 
-    let show_char_panel = !matches.is_present("no_chars") && !matches.is_present("plain");
+    let show_char_panel = *matches.get_one::<bool>("no_chars").unwrap_or(&true)
+        && !matches.get_one::<bool>("plain").unwrap_or(&false);
 
-    let show_position_panel = !matches.is_present("no_position") && !matches.is_present("plain");
+    let show_position_panel = *matches.get_one::<bool>("no_position").unwrap_or(&true)
+        && !matches.get_one::<bool>("plain").unwrap_or(&false);
 
     let display_offset: u64 = matches
-        .value_of("display_offset")
+        .get_one::<String>("display_offset")
         .map(|s| {
             parse_byte_count(s).context(anyhow!(
                 "failed to parse `--display-offset` arg {:?} as byte count",
@@ -275,10 +362,120 @@ fn run() -> Result<(), AnyhowError> {
         .transpose()?
         .unwrap_or(0);
 
-    let stdout = io::stdout();
+    let max_panels_fn = |terminal_width: u64, base_digits: u64, group_size: u64| {
+        let offset = if show_position_panel { 10 } else { 1 };
+        let col_width = if show_char_panel {
+            ((8 / group_size) * (base_digits * group_size + 1)) + 2 + 8
+        } else {
+            ((8 / group_size) * (base_digits * group_size + 1)) + 2
+        };
+        if (terminal_width - offset) / col_width < 1 {
+            1
+        } else {
+            (terminal_width - offset) / col_width
+        }
+    };
 
-    let mut output = if matches.is_present("pager") {
-        if !atty::is(Stream::Stdout) {
+    let base = if let Some(base) = matches.get_one::<String>("base")
+    .map(|s| {
+        if let Ok(base_num) = s.parse::<u8>() {
+            match base_num {
+                2 => Ok(Base::Binary),
+                8 => Ok(Base::Octal),
+                10 => Ok(Base::Decimal),
+                16 => Ok(Base::Hexadecimal),
+                _ => Err(anyhow!("The number provided is not a valid base. Valid bases are 2, 8, 10, and 16.")),
+            }
+        } else {
+            match s.as_str() {
+                "b" | "bin" | "binary" => Ok(Base::Binary),
+                "o" | "oct" | "octal" => Ok(Base::Octal),
+                "d" | "dec" | "decimal" => Ok(Base::Decimal),
+                "x" | "hex" | "hexadecimal" => Ok(Base::Hexadecimal),
+                _ => Err(anyhow!("The base provided is not valid. Valid bases are \"b\", \"o\", \"d\", and \"x\"."))
+            }
+        }
+    }).transpose()? {
+        base
+    } else {
+        Base::Hexadecimal
+    };
+
+    let base_digits = match base {
+        Base::Binary => 8,
+        Base::Octal => 3,
+        Base::Decimal => 3,
+        Base::Hexadecimal => 2,
+    };
+
+    let group_size = if let Some(group_size) = matches
+        .get_one::<String>("group_size")
+        .map(|s| {
+            s.parse::<NonZeroU8>().map(u8::from).context(anyhow!(
+                "Failed to parse `--group-size`/`-g` argument {:?} as unsigned nonzero integer",
+                s
+            ))
+        })
+        .transpose()?
+    {
+        if (group_size <= 8) && ((group_size & (group_size - 1)) == 0) {
+            group_size
+        } else {
+            return Err(anyhow!(
+                "Possible sizes for the `--group-size`/`-g` option are 1, 2, 4 or 8. "
+            ));
+        }
+    } else {
+        1
+    };
+
+    let terminal_width = terminal_size().map(|s| s.0 .0 as u64).unwrap_or(80);
+
+    let panels = if matches.get_one::<String>("panels").map(String::as_ref) == Some("auto") {
+        max_panels_fn(terminal_width, base_digits, group_size.into())
+    } else if let Some(panels) = matches
+        .get_one::<String>("panels")
+        .map(|s| {
+            s.parse::<NonZeroU64>().map(u64::from).context(anyhow!(
+                "failed to parse `--panels` arg {:?} as unsigned nonzero integer",
+                s
+            ))
+        })
+        .transpose()?
+    {
+        panels
+    } else if let Some(terminal_width) = matches
+        .get_one::<String>("terminal_width")
+        .map(|s| {
+            s.parse::<NonZeroU64>().map(u64::from).context(anyhow!(
+                "failed to parse `--terminal-width` arg {:?} as unsigned nonzero integer",
+                s
+            ))
+        })
+        .transpose()?
+    {
+        max_panels_fn(terminal_width, base_digits, group_size.into())
+    } else {
+        std::cmp::min(
+            2,
+            max_panels_fn(terminal_width, base_digits, group_size.into()),
+        )
+    };
+
+    let little_endian_format = *matches.get_one::<bool>("little_endian_format").unwrap();
+    let endianness = matches.get_one::<String>("endianness");
+    let endianness = match (
+        endianness.map(|s| s.as_ref()).unwrap(),
+        little_endian_format,
+    ) {
+        (_, true) | ("little", _) => Endianness::Little,
+        ("big", _) => Endianness::Big,
+        _ => unreachable!(),
+    };
+
+    let stdout = io::stdout();
+    let mut output = if matches.get_flag("pager") {
+        if !stdout.is_terminal() {
             return Err(anyhow!("can't use a pager when stdout is not a TTY"));
         }
         let pager = env::var_os("HEXYL_PAGER")
@@ -288,14 +485,17 @@ fn run() -> Result<(), AnyhowError> {
         Output::Stdout(stdout.lock())
     };
 
-    let mut printer = Printer::new(
-        &mut output,
-        show_color,
-        show_char_panel,
-        show_position_panel,
-        border_style,
-        squeeze,
-    );
+    let mut printer = PrinterBuilder::new(&mut output)
+        .show_color(show_color)
+        .show_char_panel(show_char_panel)
+        .show_position_panel(show_position_panel)
+        .with_border_style(border_style)
+        .enable_squeezing(squeeze)
+        .num_panels(panels)
+        .group_size(group_size)
+        .with_base(base)
+        .endianness(endianness)
+        .build();
     printer.display_offset(skip_offset + display_offset);
     printer.print_all(&mut reader).map_err(|e| anyhow!(e))?;
 
@@ -305,17 +505,15 @@ fn run() -> Result<(), AnyhowError> {
 }
 
 fn main() {
-    // Enable ANSI support for Windows
-    #[cfg(windows)]
-    let _ = ansi_term::enable_ansi_support();
-
     let result = run();
 
     if let Err(err) = result {
-        match err.downcast_ref::<io::Error>() {
-            Some(io_err) if io_err.kind() == io::ErrorKind::BrokenPipe => (),
-            _ => eprintln!("Error: {:?}", err),
+        if let Some(io_error) = err.downcast_ref::<io::Error>() {
+            if io_error.kind() == ::std::io::ErrorKind::BrokenPipe {
+                std::process::exit(0);
+            }
         }
+        eprintln!("Error: {err:?}");
         std::process::exit(1);
     }
 }
@@ -326,7 +524,7 @@ enum Output<'a> {
 }
 
 impl<'a> Output<'a> {
-    fn wait(&mut self) -> Result<(), AnyhowError> {
+    fn wait(&mut self) -> Result<(), anyhow::Error> {
         // flush output, just in case
         let _ = self.flush();
         match self {
@@ -369,7 +567,7 @@ impl<'a> Write for Output<'a> {
     }
 }
 
-fn spawn_pager<'a, 'b>(pager: &'a OsStr) -> Result<Output<'b>, AnyhowError> {
+fn spawn_pager<'a, 'b>(pager: &'a OsStr) -> Result<Output<'b>, anyhow::Error> {
     let mut cmd = Command::new(pager);
     cmd.stdin(Stdio::piped());
     if Path::new(pager).file_stem().map(|s| s.to_str()) == Some(Some("less")) {
@@ -648,162 +846,4 @@ fn try_parse_as_hex_number(n: &str) -> Option<Result<i64, ByteOffsetParseError>>
         }
         i64::from_str_radix(num, 16).map_err(ParseNum)
     })
-}
-
-#[test]
-fn unit_multipliers() {
-    use Unit::*;
-    assert_eq!(Kilobyte.get_multiplier(), 1000 * Byte.get_multiplier());
-    assert_eq!(Megabyte.get_multiplier(), 1000 * Kilobyte.get_multiplier());
-    assert_eq!(Gigabyte.get_multiplier(), 1000 * Megabyte.get_multiplier());
-    assert_eq!(Terabyte.get_multiplier(), 1000 * Gigabyte.get_multiplier());
-
-    assert_eq!(Kibibyte.get_multiplier(), 1024 * Byte.get_multiplier());
-    assert_eq!(Mebibyte.get_multiplier(), 1024 * Kibibyte.get_multiplier());
-    assert_eq!(Gibibyte.get_multiplier(), 1024 * Mebibyte.get_multiplier());
-    assert_eq!(Tebibyte.get_multiplier(), 1024 * Gibibyte.get_multiplier());
-}
-
-#[test]
-fn test_process_sign() {
-    use ByteOffsetKind::*;
-    use ByteOffsetParseError::*;
-    assert_eq!(process_sign_of("123"), Ok(("123", ForwardFromBeginning)));
-    assert_eq!(process_sign_of("+123"), Ok(("123", ForwardFromLastOffset)));
-    assert_eq!(process_sign_of("-123"), Ok(("123", BackwardFromEnd)));
-    assert_eq!(process_sign_of("-"), Err(EmptyAfterSign));
-    assert_eq!(process_sign_of("+"), Err(EmptyAfterSign));
-    assert_eq!(process_sign_of(""), Err(Empty));
-}
-
-#[test]
-fn test_parse_as_hex() {
-    assert_eq!(try_parse_as_hex_number("73"), None);
-    assert_eq!(try_parse_as_hex_number("0x1337"), Some(Ok(0x1337)));
-    assert!(matches!(try_parse_as_hex_number("0xnope"), Some(Err(_))));
-    assert!(matches!(try_parse_as_hex_number("0x-1"), Some(Err(_))));
-}
-
-#[test]
-fn extract_num_and_unit() {
-    use ByteOffsetParseError::*;
-    use Unit::*;
-    // byte is default unit
-    assert_eq!(extract_num_and_unit_from("4"), Ok((4, Byte)));
-    // blocks are returned without customization
-    assert_eq!(
-        extract_num_and_unit_from("2blocks"),
-        Ok((2, Block { custom_size: None }))
-    );
-    // no normalization is performed
-    assert_eq!(extract_num_and_unit_from("1024kb"), Ok((1024, Kilobyte)));
-
-    // unit without number results in error
-    assert_eq!(
-        extract_num_and_unit_from("gib"),
-        Err(EmptyWithUnit("gib".to_string()))
-    );
-    // empty string results in error
-    assert_eq!(extract_num_and_unit_from(""), Err(Empty));
-    // an invalid unit results in an error
-    assert_eq!(
-        extract_num_and_unit_from("25litres"),
-        Err(InvalidUnit("litres".to_string()))
-    );
-}
-
-#[test]
-fn test_parse_byte_offset() {
-    use ByteOffsetParseError::*;
-
-    macro_rules! success {
-        ($input: expr, $expected_kind: ident $expected_value: expr) => {
-            success!($input, $expected_kind $expected_value; block_size: DEFAULT_BLOCK_SIZE)
-        };
-        ($input: expr, $expected_kind: ident $expected_value: expr; block_size: $block_size: expr) => {
-            assert_eq!(
-                parse_byte_offset($input, PositiveI64::new($block_size).unwrap()),
-                Ok(
-                    ByteOffset {
-                        value: NonNegativeI64::new($expected_value).unwrap(),
-                        kind: ByteOffsetKind::$expected_kind,
-                    }
-                ),
-            );
-        };
-    }
-
-    macro_rules! error {
-        ($input: expr, $expected_err: expr) => {
-            assert_eq!(
-                parse_byte_offset($input, PositiveI64::new(DEFAULT_BLOCK_SIZE).unwrap()),
-                Err($expected_err),
-            );
-        };
-    }
-
-    success!("0", ForwardFromBeginning 0);
-    success!("1", ForwardFromBeginning 1);
-    success!("1", ForwardFromBeginning 1);
-    success!("100", ForwardFromBeginning 100);
-    success!("+100", ForwardFromLastOffset 100);
-
-    success!("0x0", ForwardFromBeginning 0);
-    success!("0xf", ForwardFromBeginning 15);
-    success!("0xdeadbeef", ForwardFromBeginning 3_735_928_559);
-
-    success!("1KB", ForwardFromBeginning 1000);
-    success!("2MB", ForwardFromBeginning 2000000);
-    success!("3GB", ForwardFromBeginning 3000000000);
-    success!("4TB", ForwardFromBeginning 4000000000000);
-    success!("+4TB", ForwardFromLastOffset 4000000000000);
-
-    success!("1k", ForwardFromBeginning 1024);
-    success!("2M", ForwardFromBeginning 2097152);
-    success!("1GiB", ForwardFromBeginning 1073741824);
-    success!("2TiB", ForwardFromBeginning 2199023255552);
-    success!("+2TiB", ForwardFromLastOffset 2199023255552);
-
-    success!("0xff", ForwardFromBeginning 255);
-    success!("0xEE", ForwardFromBeginning 238);
-    success!("+0xFF", ForwardFromLastOffset 255);
-
-    success!("1block", ForwardFromBeginning 512; block_size: 512);
-    success!("2block", ForwardFromBeginning 1024; block_size: 512);
-    success!("1block", ForwardFromBeginning 4; block_size: 4);
-    success!("2block", ForwardFromBeginning 8; block_size: 4);
-
-    // empty string is invalid
-    error!("", Empty);
-    // These are also bad.
-    error!("+", EmptyAfterSign);
-    error!("-", EmptyAfterSign);
-    error!("a", InvalidNumAndUnit("a".to_owned()));
-    error!("K", EmptyWithUnit("K".to_owned()));
-    error!("k", EmptyWithUnit("k".to_owned()));
-    error!("m", EmptyWithUnit("m".to_owned()));
-    error!("block", EmptyWithUnit("block".to_owned()));
-    // leading/trailing space is invalid
-    error!(" 0", InvalidNumAndUnit(" 0".to_owned()));
-    error!("0 ", InvalidUnit(" ".to_owned()));
-    // Signs after the hex prefix make no sense
-    error!("0x-12", SignFoundAfterHexPrefix('-'));
-    // This was previously accepted but shouldn't be.
-    error!("0x+12", SignFoundAfterHexPrefix('+'));
-    // invalid suffix
-    error!("1234asdf", InvalidUnit("asdf".to_owned()));
-    // bad numbers
-    error!("asdf1234", InvalidNumAndUnit("asdf1234".to_owned()));
-    error!("a1s2d3f4", InvalidNumAndUnit("a1s2d3f4".to_owned()));
-    // multiplication overflows u64
-    error!("20000000TiB", UnitMultiplicationOverflow);
-
-    assert!(
-        match parse_byte_offset("99999999999999999999", PositiveI64::new(512).unwrap()) {
-            // We can't check against the kind of the `ParseIntError`, so we'll just make sure it's the
-            // same as trying to do the parse directly.
-            Err(ParseNum(e)) => e == "99999999999999999999".parse::<i64>().unwrap_err(),
-            _ => false,
-        }
-    );
 }
