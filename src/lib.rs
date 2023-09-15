@@ -13,11 +13,11 @@ pub enum Base {
     Hexadecimal,
 }
 
-const COLOR_NULL: &[u8] = colors::BrightBlack::ANSI_FG.as_bytes();
-const COLOR_OFFSET: &[u8] = colors::BrightBlack::ANSI_FG.as_bytes();
+const COLOR_NULL: &[u8] = colors::CustomColor::<108, 108, 108>::ANSI_FG.as_bytes();
+const COLOR_OFFSET: &[u8] = colors::CustomColor::<108, 108, 108>::ANSI_FG.as_bytes();
 const COLOR_ASCII_PRINTABLE: &[u8] = colors::Cyan::ANSI_FG.as_bytes();
 const COLOR_ASCII_WHITESPACE: &[u8] = colors::Green::ANSI_FG.as_bytes();
-const COLOR_ASCII_OTHER: &[u8] = colors::Green::ANSI_FG.as_bytes();
+const COLOR_ASCII_OTHER: &[u8] = colors::Magenta::ANSI_FG.as_bytes();
 const COLOR_NONASCII: &[u8] = colors::Yellow::ANSI_FG.as_bytes();
 const COLOR_RESET: &[u8] = colors::Default::ANSI_FG.as_bytes();
 
