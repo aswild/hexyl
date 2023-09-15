@@ -567,7 +567,7 @@ impl<'a> Write for Output<'a> {
     }
 }
 
-fn spawn_pager<'a, 'b>(pager: &'a OsStr) -> Result<Output<'b>, anyhow::Error> {
+fn spawn_pager(pager: &OsStr) -> Result<Output<'static>, anyhow::Error> {
     let mut cmd = Command::new(pager);
     cmd.stdin(Stdio::piped());
     if Path::new(pager).file_stem().map(|s| s.to_str()) == Some(Some("less")) {

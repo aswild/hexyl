@@ -274,6 +274,7 @@ pub struct Printer<Writer: Write> {
 }
 
 impl<Writer: Write> Printer<Writer> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         writer: Writer,
         show_color: bool,
