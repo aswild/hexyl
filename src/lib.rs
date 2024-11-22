@@ -6,8 +6,6 @@ pub use input::*;
 
 use std::io::{self, BufReader, Read, Write};
 
-use clap::ValueEnum;
-
 pub enum Base {
     Binary,
     Octal,
@@ -24,7 +22,8 @@ pub enum ByteCategory {
     NonAscii,
 }
 
-#[derive(Copy, Clone, Debug, Default, ValueEnum)]
+#[derive(Copy, Clone, Debug, Default)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[non_exhaustive]
 pub enum CharacterTable {
     /// Show printable ASCII characters as-is, '⋄' for NULL bytes, ' ' for
@@ -37,15 +36,16 @@ pub enum CharacterTable {
     Ascii,
 
     /// Show printable EBCDIC as-is, ' ' for space, '.' for everything else.
-    #[value(name = "codepage-1047")]
+    #[cfg_attr(feature = "cli", value(name = "codepage-1047"))]
     CP1047,
 
     /// Uses code page 437 (for non-ASCII bytes).
-    #[value(name = "codepage-437")]
+    #[cfg_attr(feature = "cli", value(name = "codepage-437"))]
     CP437,
 }
 
-#[derive(Copy, Clone, Debug, Default, ValueEnum)]
+#[derive(Copy, Clone, Debug, Default)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum Endianness {
     /// Print out groups in little-endian format.
     Little,
@@ -124,7 +124,8 @@ struct BorderElements {
     right_corner: char,
 }
 
-#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum BorderStyle {
     /// Draw a border with Unicode characters.
     #[default]
