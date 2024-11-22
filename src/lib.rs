@@ -600,15 +600,25 @@ impl<Writer: Write> Printer<Writer> {
     }
 
     pub fn print_bytes(&mut self) -> io::Result<()> {
-        let mut buf = self.line_buf.clone();
-
-        if matches!(self.endianness, Endianness::Little) {
-            self.reorder_buffer_to_little_endian(&mut buf);
-        };
-
-        for (i, &b) in buf.iter().enumerate() {
-            self.print_byte(i, b)?;
+        match self.endianness {
+            Endianness::Big => {
+                // we can't directly iterate over self.line_buf because that immutably borrows from
+                // self but print_byte needs &mut self. The bounds check while indexing can't be
+                // elided because technically self.line_buf could change length from the print_byte
+                // call, but that's still a win compared to cloning self.line_buf unconditionally.
+                for i in 0..self.line_buf.len() {
+                    self.print_byte(i, self.line_buf[i])?;
+                }
+            }
+            Endianness::Little => {
+                let mut buf = self.line_buf.clone();
+                self.reorder_buffer_to_little_endian(&mut buf);
+                for (i, b) in buf.into_iter().enumerate() {
+                    self.print_byte(i, b)?;
+                }
+            }
         }
+
         Ok(())
     }
 
