@@ -447,7 +447,7 @@ impl<Writer: Write> Printer<Writer> {
         if self.show_position_panel {
             match self.squeezer {
                 Squeezer::Print => {
-                    self.writer.write_all(&[b'*'])?;
+                    self.writer.write_all(b"*")?;
                     if self.show_color {
                         self.writer.write_all(COLOR_RESET)?;
                     }
@@ -587,7 +587,7 @@ impl<Writer: Write> Printer<Writer> {
         Ok(())
     }
 
-    fn reorder_buffer_to_little_endian(&self, buf: &mut Vec<u8>) {
+    fn reorder_buffer_to_little_endian(&self, buf: &mut [u8]) {
         let n = buf.len();
         let group_sz = self.group_size as usize;
 
