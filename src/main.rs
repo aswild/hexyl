@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{self, prelude::*, BufWriter, IsTerminal, SeekFrom, StdoutLock};
 use std::num::{NonZeroI64, NonZeroU64};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 
 use clap::builder::ArgPredicate;
 use clap::{ArgAction, Parser, ValueEnum};
@@ -483,18 +483,22 @@ fn main() {
 
 enum Output<'a> {
     Stdout(StdoutLock<'a>),
-    Pager(Child),
+    Pager {
+        child: Child,
+        pipe: BufWriter<ChildStdin>,
+    },
     File(BufWriter<File>),
 }
 
 impl<'a> Output<'a> {
-    fn wait(&mut self) -> Result<(), anyhow::Error> {
-        // flush output, just in case
+    fn wait(mut self) -> Result<(), anyhow::Error> {
         let _ = self.flush();
         match self {
             Self::Stdout(_) | Self::File(_) => Ok(()),
-            Self::Pager(child) => {
-                // note: wait will close the stdin pipe for us before actually waiting
+            Self::Pager { mut child, pipe } => {
+                // we've taken the stdin handle from the Child, so we have to close it ourselves
+                // before waiting.
+                drop(pipe);
                 let status = child.wait().context("failed to wait for pager process")?;
                 if status.success() {
                     Ok(())
@@ -510,12 +514,7 @@ impl<'a> Write for Output<'a> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
             Self::Stdout(stdout) => stdout.write(buf),
-            // note: Write is implemented for &ChildStdin, so mut child isn't needed
-            Self::Pager(child) => child
-                .stdin
-                .as_ref()
-                .expect("Output::Pager Child has no stdin")
-                .write(buf),
+            Self::Pager { pipe, .. } => pipe.write(buf),
             Self::File(file) => file.write(buf),
         }
     }
@@ -523,11 +522,7 @@ impl<'a> Write for Output<'a> {
     fn flush(&mut self) -> io::Result<()> {
         match self {
             Self::Stdout(stdout) => stdout.flush(),
-            Self::Pager(child) => child
-                .stdin
-                .as_ref()
-                .expect("Output::Pager Child has no stdin")
-                .flush(),
+            Self::Pager { pipe, .. } => pipe.flush(),
             Self::File(file) => file.flush(),
         }
     }
@@ -542,10 +537,12 @@ fn spawn_pager(pager: &OsStr) -> Result<Output<'static>, anyhow::Error> {
         cmd.arg("--quit-if-one-screen");
     }
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .with_context(|| format!("Failed to spawn pager '{}'", pager.to_string_lossy()))?;
-    Ok(Output::Pager(child))
+    let pipe = BufWriter::new(child.stdin.take().expect("child is missing stdin handle"));
+
+    Ok(Output::Pager { child, pipe })
 }
 
 #[derive(Clone, Copy, Debug, Default, Hash, Eq, Ord, PartialEq, PartialOrd)]
