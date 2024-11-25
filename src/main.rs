@@ -1,7 +1,7 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{self, prelude::*, IsTerminal, SeekFrom, StdoutLock};
+use std::io::{self, prelude::*, BufWriter, IsTerminal, SeekFrom, StdoutLock};
 use std::num::{NonZeroI64, NonZeroU64};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -428,8 +428,23 @@ fn run() -> Result<()> {
             .or_else(|| env::var_os("PAGER"))
             .unwrap_or_else(|| "less".into());
         spawn_pager(&pager)?
-    } else {
+    } else if stdout.is_terminal() {
+        // when writing to a terminal, use the default line-buffered stdout
         Output::Stdout(stdout.lock())
+    } else {
+        // when writing elsewhere, try to re-open stdout as a regular file and apply block
+        // buffering to reduce overhead. If we're not unix or if opening /dev/stdout fails,
+        // then don't worry about it and use stdout normally.
+        cfg!(unix)
+            .then(|| {
+                File::options()
+                    .write(true)
+                    .open("/dev/stdout")
+                    .map(|file| Output::File(BufWriter::new(file)))
+                    .ok()
+            })
+            .flatten()
+            .unwrap_or_else(|| Output::Stdout(stdout.lock()))
     };
 
     let mut printer = PrinterBuilder::new(&mut output)
@@ -469,6 +484,7 @@ fn main() {
 enum Output<'a> {
     Stdout(StdoutLock<'a>),
     Pager(Child),
+    File(BufWriter<File>),
 }
 
 impl<'a> Output<'a> {
@@ -476,7 +492,7 @@ impl<'a> Output<'a> {
         // flush output, just in case
         let _ = self.flush();
         match self {
-            Self::Stdout(_) => Ok(()),
+            Self::Stdout(_) | Self::File(_) => Ok(()),
             Self::Pager(child) => {
                 // note: wait will close the stdin pipe for us before actually waiting
                 let status = child.wait().context("failed to wait for pager process")?;
@@ -500,6 +516,7 @@ impl<'a> Write for Output<'a> {
                 .as_ref()
                 .expect("Output::Pager Child has no stdin")
                 .write(buf),
+            Self::File(file) => file.write(buf),
         }
     }
 
@@ -511,6 +528,7 @@ impl<'a> Write for Output<'a> {
                 .as_ref()
                 .expect("Output::Pager Child has no stdin")
                 .flush(),
+            Self::File(file) => file.flush(),
         }
     }
 }
