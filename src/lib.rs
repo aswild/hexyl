@@ -81,14 +81,14 @@ impl Byte {
         }
     }
 
-    fn color(self) -> &'static [u8] {
+    fn color(self) -> ColorType {
         use crate::ByteCategory::*;
         match self.category() {
-            Null => COLOR_NULL,
-            AsciiPrintable => COLOR_ASCII_PRINTABLE,
-            AsciiWhitespace => COLOR_ASCII_WHITESPACE,
-            AsciiOther => COLOR_ASCII_OTHER,
-            NonAscii => COLOR_NONASCII,
+            Null => ColorType::Null,
+            AsciiPrintable => ColorType::AsciiPrintable,
+            AsciiWhitespace => ColorType::AsciiWhitespace,
+            AsciiOther => ColorType::AsciiOther,
+            NonAscii => ColorType::NonAscii,
         }
     }
 
@@ -298,7 +298,7 @@ pub struct Printer<Writer: Write> {
     show_char_panel: bool,
     show_position_panel: bool,
     show_color: bool,
-    curr_color: Option<&'static [u8]>,
+    curr_color: Option<ColorType>,
     border_style: BorderStyle,
     byte_hex_panel: Vec<String>,
     byte_char_panel: Vec<String>,
@@ -442,14 +442,14 @@ impl<Writer: Write> Printer<Writer> {
                 .as_bytes(),
         )?;
         if self.show_color {
-            self.writer.write_all(COLOR_OFFSET)?;
+            self.writer.write_all(ColorType::Offset.ansi_bytes())?;
         }
         if self.show_position_panel {
             match self.squeezer {
                 Squeezer::Print => {
                     self.writer.write_all(b"*")?;
                     if self.show_color {
-                        self.writer.write_all(COLOR_RESET)?;
+                        self.writer.write_all(ColorType::Reset.ansi_bytes())?;
                     }
                     self.writer.write_all(b"       ")?;
                 }
@@ -464,7 +464,7 @@ impl<Writer: Write> Printer<Writer> {
                             .write_all(self.byte_hex_panel_g[byte as usize].as_bytes())?;
                     }
                     if self.show_color {
-                        self.writer.write_all(COLOR_RESET)?;
+                        self.writer.write_all(ColorType::Reset.ansi_bytes())?;
                     }
                 }
             }
@@ -483,9 +483,10 @@ impl<Writer: Write> Printer<Writer> {
             Squeezer::Print | Squeezer::Delete => self.writer.write_all(b" ")?,
             Squeezer::Ignore | Squeezer::Disabled => {
                 if let Some(&b) = self.line_buf.get(i as usize) {
-                    if self.show_color && self.curr_color != Some(Byte(b).color()) {
-                        self.writer.write_all(Byte(b).color())?;
-                        self.curr_color = Some(Byte(b).color());
+                    let byte_color = Byte(b).color();
+                    if self.show_color && self.curr_color != Some(byte_color) {
+                        self.writer.write_all(byte_color.ansi_bytes())?;
+                        self.curr_color = Some(byte_color);
                     }
                     self.writer
                         .write_all(self.byte_char_panel[b as usize].as_bytes())?;
@@ -496,7 +497,7 @@ impl<Writer: Write> Printer<Writer> {
         }
         if i == 8 * self.panels - 1 {
             if self.show_color {
-                self.writer.write_all(COLOR_RESET)?;
+                self.writer.write_all(ColorType::Reset.ansi_bytes())?;
                 self.curr_color = None;
             }
             self.writer.write_all(
@@ -507,7 +508,7 @@ impl<Writer: Write> Printer<Writer> {
             )?;
         } else if i % 8 == 7 {
             if self.show_color {
-                self.writer.write_all(COLOR_RESET)?;
+                self.writer.write_all(ColorType::Reset.ansi_bytes())?;
                 self.curr_color = None;
             }
             self.writer.write_all(
@@ -533,12 +534,12 @@ impl<Writer: Write> Printer<Writer> {
             Squeezer::Print => {
                 if !self.show_position_panel && i == 0 {
                     if self.show_color {
-                        self.writer.write_all(COLOR_OFFSET)?;
+                        self.writer.write_all(ColorType::Offset.ansi_bytes())?;
                     }
                     self.writer
                         .write_all(self.byte_char_panel[b'*' as usize].as_bytes())?;
                     if self.show_color {
-                        self.writer.write_all(COLOR_RESET)?;
+                        self.writer.write_all(ColorType::Reset.ansi_bytes())?;
                     }
                 } else if i % (self.group_size as usize) == 0 {
                     self.writer.write_all(b" ")?;
@@ -552,9 +553,10 @@ impl<Writer: Write> Printer<Writer> {
                 if i % (self.group_size as usize) == 0 {
                     self.writer.write_all(b" ")?;
                 }
-                if self.show_color && self.curr_color != Some(Byte(b).color()) {
-                    self.writer.write_all(Byte(b).color())?;
-                    self.curr_color = Some(Byte(b).color());
+                let byte_color = Byte(b).color();
+                if self.show_color && self.curr_color != Some(byte_color) {
+                    self.writer.write_all(byte_color.ansi_bytes())?;
+                    self.curr_color = Some(byte_color);
                 }
                 self.writer
                     .write_all(self.byte_hex_panel[b as usize].as_bytes())?;
@@ -564,7 +566,7 @@ impl<Writer: Write> Printer<Writer> {
         if i % 8 == 7 {
             if self.show_color {
                 self.curr_color = None;
-                self.writer.write_all(COLOR_RESET)?;
+                self.writer.write_all(ColorType::Reset.ansi_bytes())?;
             }
             self.writer.write_all(b" ")?;
             // byte is last in last panel
