@@ -1,8 +1,8 @@
 pub(crate) mod colors;
 pub(crate) mod input;
 
-pub use colors::*;
-pub use input::*;
+pub use colors::ColorType;
+pub use input::Input;
 
 use std::io::{self, BufReader, Read, Write};
 
@@ -82,37 +82,35 @@ impl Byte {
     }
 
     fn color(self) -> ColorType {
-        use crate::ByteCategory::*;
         match self.category() {
-            Null => ColorType::Null,
-            AsciiPrintable => ColorType::AsciiPrintable,
-            AsciiWhitespace => ColorType::AsciiWhitespace,
-            AsciiOther => ColorType::AsciiOther,
-            NonAscii => ColorType::NonAscii,
+            ByteCategory::Null => ColorType::Null,
+            ByteCategory::AsciiPrintable => ColorType::AsciiPrintable,
+            ByteCategory::AsciiWhitespace => ColorType::AsciiWhitespace,
+            ByteCategory::AsciiOther => ColorType::AsciiOther,
+            ByteCategory::NonAscii => ColorType::NonAscii,
         }
     }
 
     fn as_char(self, character_table: CharacterTable) -> char {
-        use crate::ByteCategory::*;
         match character_table {
             CharacterTable::Default => match self.category() {
-                Null => '⋄',
-                AsciiPrintable => self.0 as char,
-                AsciiWhitespace if self.0 == 0x20 => ' ',
-                AsciiWhitespace => '_',
-                AsciiOther => '•',
-                NonAscii => '×',
+                ByteCategory::Null => '⋄',
+                ByteCategory::AsciiPrintable => self.0 as char,
+                ByteCategory::AsciiWhitespace if self.0 == 0x20 => ' ',
+                ByteCategory::AsciiWhitespace => '_',
+                ByteCategory::AsciiOther => '•',
+                ByteCategory::NonAscii => '×',
             },
             CharacterTable::Ascii => match self.category() {
-                Null => '.',
-                AsciiPrintable => self.0 as char,
-                AsciiWhitespace if self.0 == 0x20 => ' ',
-                AsciiWhitespace => '.',
-                AsciiOther => '.',
-                NonAscii => '.',
+                ByteCategory::Null => '.',
+                ByteCategory::AsciiPrintable => self.0 as char,
+                ByteCategory::AsciiWhitespace if self.0 == 0x20 => ' ',
+                ByteCategory::AsciiWhitespace => '.',
+                ByteCategory::AsciiOther => '.',
+                ByteCategory::NonAscii => '.',
             },
-            CharacterTable::CP1047 => CP1047[self.0 as usize],
-            CharacterTable::CP437 => CP437[self.0 as usize],
+            CharacterTable::CP1047 => colors::CP1047[self.0 as usize],
+            CharacterTable::CP437 => colors::CP437[self.0 as usize],
         }
     }
 }

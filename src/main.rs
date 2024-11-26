@@ -689,8 +689,6 @@ enum ByteOffsetParseError {
 }
 
 fn parse_byte_offset(n: &str, block_size: PositiveI64) -> Result<ByteOffset, ByteOffsetParseError> {
-    use ByteOffsetParseError::*;
-
     let (n, kind) = process_sign_of(n)?;
 
     let into_byte_offset = |value| {
@@ -714,7 +712,7 @@ fn parse_byte_offset(n: &str, block_size: PositiveI64) -> Result<ByteOffset, Byt
     }
 
     num.checked_mul(unit.get_multiplier())
-        .ok_or(UnitMultiplicationOverflow)
+        .ok_or(ByteOffsetParseError::UnitMultiplicationOverflow)
         .and_then(into_byte_offset)
 }
 
@@ -724,9 +722,8 @@ fn parse_byte_offset(n: &str, block_size: PositiveI64) -> Result<ByteOffset, Byt
 /// When the unit is [Unit::Block], it is returned without custom size.
 /// No normalization is performed, that is "1024" is extracted to (1024, Byte), not (1, Kibibyte).
 fn extract_num_and_unit_from(n: &str) -> Result<(i64, Unit), ByteOffsetParseError> {
-    use ByteOffsetParseError::*;
     if n.is_empty() {
-        return Err(Empty);
+        return Err(ByteOffsetParseError::Empty);
     }
     match n.chars().position(|c| !c.is_ascii_digit()) {
         Some(unit_begin_idx) => {
@@ -744,24 +741,26 @@ fn extract_num_and_unit_from(n: &str) -> Result<(i64, Unit), ByteOffsetParseErro
                 "block" | "blocks" => Unit::Block { custom_size: None },
                 _ => {
                     return if n.is_empty() {
-                        Err(InvalidNumAndUnit(raw_unit.to_string()))
+                        Err(ByteOffsetParseError::InvalidNumAndUnit(
+                            raw_unit.to_string(),
+                        ))
                     } else {
-                        Err(InvalidUnit(raw_unit.to_string()))
+                        Err(ByteOffsetParseError::InvalidUnit(raw_unit.to_string()))
                     }
                 }
             };
             let num = n.parse::<i64>().map_err(|e| {
                 if n.is_empty() {
-                    EmptyWithUnit(raw_unit.to_owned())
+                    ByteOffsetParseError::EmptyWithUnit(raw_unit.to_owned())
                 } else {
-                    ParseNum(e)
+                    ByteOffsetParseError::ParseNum(e)
                 }
             })?;
             Ok((num, unit))
         }
         None => {
             // no unit part
-            let num = n.parse::<i64>().map_err(ParseNum)?;
+            let num = n.parse::<i64>().map_err(ByteOffsetParseError::ParseNum)?;
             Ok((num, Unit::Byte))
         }
     }
@@ -770,12 +769,11 @@ fn extract_num_and_unit_from(n: &str) -> Result<(i64, Unit), ByteOffsetParseErro
 /// Extracts a [ByteOffsetKind] based on the sign at the beginning of the given string.
 /// Returns the input string without the sign (or an equal string if there wasn't any sign).
 fn process_sign_of(n: &str) -> Result<(&str, ByteOffsetKind), ByteOffsetParseError> {
-    use ByteOffsetParseError::*;
     let mut chars = n.chars();
     let next_char = chars.next();
     let check_empty_after_sign = || {
         if chars.clone().next().is_none() {
-            Err(EmptyAfterSign)
+            Err(ByteOffsetParseError::EmptyAfterSign)
         } else {
             Ok(chars.as_str())
         }
@@ -786,7 +784,7 @@ fn process_sign_of(n: &str) -> Result<(&str, ByteOffsetKind), ByteOffsetParseErr
             ByteOffsetKind::ForwardFromLastOffset,
         )),
         Some('-') => Ok((check_empty_after_sign()?, ByteOffsetKind::BackwardFromEnd)),
-        None => Err(Empty),
+        None => Err(ByteOffsetParseError::Empty),
         _ => Ok((n, ByteOffsetKind::ForwardFromBeginning)),
     }
 }
@@ -794,19 +792,18 @@ fn process_sign_of(n: &str) -> Result<(&str, ByteOffsetKind), ByteOffsetParseErr
 /// If `n` starts with a hex prefix, its remaining part is returned as some number (if possible),
 /// otherwise None is returned.
 fn try_parse_as_hex_number(n: &str) -> Option<Result<i64, ByteOffsetParseError>> {
-    use ByteOffsetParseError::*;
     n.strip_prefix(HEX_PREFIX).map(|num| {
         let mut chars = num.chars();
         match chars.next() {
             Some(c @ '+') | Some(c @ '-') => {
                 return if chars.next().is_none() {
-                    Err(EmptyAfterSign)
+                    Err(ByteOffsetParseError::EmptyAfterSign)
                 } else {
-                    Err(SignFoundAfterHexPrefix(c))
+                    Err(ByteOffsetParseError::SignFoundAfterHexPrefix(c))
                 }
             }
             _ => (),
         }
-        i64::from_str_radix(num, 16).map_err(ParseNum)
+        i64::from_str_radix(num, 16).map_err(ByteOffsetParseError::ParseNum)
     })
 }
